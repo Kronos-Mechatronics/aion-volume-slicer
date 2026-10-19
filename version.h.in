@@ -1,0 +1,13 @@
+#pragma once
+
+#define VER_PROJECT_NAME            "@PROJECT_NAME@\0"
+#define VER_PROJECT_NAME_WSTR       L"@PROJECT_NAME@\0"
+#define VER_FILEVERSION_MAJOR       @PROJECT_VERSION_MAJOR@
+#define VER_FILEVERSION_MINOR       @PROJECT_VERSION_MINOR@
+#define VER_FILEVERSION_PATCH       @PROJECT_VERSION_PATCH@
+#define VER_FILEVERSION             @FILE_VERSION@
+#define VER_FILEVERSION_STR         "@FILE_VERSION_STR@\0"
+#define VER_PLUGIN_UUID             "@PLUGIN_UUID@"
+#define VER_VENDOR_WSTR             L"@VENDOR@\0"
+#define VER_VENDOR_URL_WSTR         L"https://@VENDOR_URL@\0"
+#define VER_UPDATE_URL_WSTR         L"https://github.com/Kronos-Mechatronics/aion-slicer\0"
