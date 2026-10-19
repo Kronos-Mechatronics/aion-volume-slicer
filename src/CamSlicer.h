@@ -2,6 +2,14 @@
 #include "stdafx.h"
 #include "CamBase.h"
 
+// include math defines for M_PI
+#include <corecrt_math_defines.h>
+// hint from: https://discourse.mcneel.com/t/multithreading-in-rhino-c-plug-in/76122/5
+#include <boost/thread/win32/mfc_thread_init.hpp>
+//libslic3r includes
+#include <Model.hpp>
+#include <Print.hpp>
+
 class CamSlicer : public Aion::CamBase
 {
 public:
@@ -32,4 +40,6 @@ private:
     Aion::ConfigOptionTool* m_tool;
     // Selected curve geometries
     Aion::ConfigOptionComponentVector* m_curves;
+    // Dummy layer pointers
+    const Slic3r::Layer* s_layer;
 };
