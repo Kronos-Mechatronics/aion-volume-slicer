@@ -19,19 +19,23 @@ RHINO_PLUG_IN_DECLARE
 
 // Rhino plug-in name
 // Provide a short, friendly name for this plug-in.
-RHINO_PLUG_IN_NAME(L"CamSlicer");
+RHINO_PLUG_IN_NAME(VER_PROJECT_NAME_WSTR);
 
 // Rhino plug-in id
 // Provide a unique uuid for this plug-in.
-RHINO_PLUG_IN_ID(L"538245D1-E68C-4FC2-86B4-EAD3E1500C22");
+// convert const char* to std::wstring
+std::string plugin_uuid = VER_PLUGIN_UUID;
+std::wstring VER_PLUGIN_UUID_w(plugin_uuid.begin(), plugin_uuid.end());
+// set the plugin uuid from CMakeLists.txt (needed to have access to the uuid in cpack)
+RHINO_PLUG_IN_ID(VER_PLUGIN_UUID_w.c_str());
 
 // Rhino plug-in version
 // Provide a version number string for this plug-in.
-RHINO_PLUG_IN_VERSION(__DATE__ "  " __TIME__)
+RHINO_PLUG_IN_VERSION(VER_FILEVERSION_STR);
 
 // Rhino plug-in description
 // Provide a description of this plug-in.
-RHINO_PLUG_IN_DESCRIPTION(L"CamSlicer plug-in for Rhinoceros®");
+RHINO_PLUG_IN_DESCRIPTION(L"CamSlicer plug-in for Aion-5X.");
 
 // Rhino plug-in icon resource id
 // Provide an icon resource this plug-in.
@@ -45,14 +49,13 @@ RHINO_PLUG_IN_ICON_RESOURCE_ID(IDI_ICON);
 //
 // When completed, delete the following #error directive.
 //#error Developer declarations block is incomplete!
-RHINO_PLUG_IN_DEVELOPER_ORGANIZATION(L"My Company Name");
-RHINO_PLUG_IN_DEVELOPER_ADDRESS(L"123 Developer Street\r\nCity State 12345-6789");
-RHINO_PLUG_IN_DEVELOPER_COUNTRY(L"My Country");
-RHINO_PLUG_IN_DEVELOPER_PHONE(L"123.456.7890");
-RHINO_PLUG_IN_DEVELOPER_FAX(L"123.456.7891");
-RHINO_PLUG_IN_DEVELOPER_EMAIL(L"support@mycompany.com");
-RHINO_PLUG_IN_DEVELOPER_WEBSITE(L"http://www.mycompany.com");
-RHINO_PLUG_IN_UPDATE_URL(L"http://www.mycompany.com/support");
+RHINO_PLUG_IN_DEVELOPER_ORGANIZATION(VER_VENDOR_WSTR);
+RHINO_PLUG_IN_DEVELOPER_ADDRESS(L"Muggenhofer Straße 141\r\n90429 Nürnberg");
+RHINO_PLUG_IN_DEVELOPER_COUNTRY(L"Germany");
+RHINO_PLUG_IN_DEVELOPER_PHONE(L"");
+RHINO_PLUG_IN_DEVELOPER_EMAIL(L"customerservice@kronos-mct.com");
+RHINO_PLUG_IN_DEVELOPER_WEBSITE(VER_VENDOR_URL_WSTR);
+RHINO_PLUG_IN_UPDATE_URL(VER_UPDATE_URL_WSTR);
 
 // The one and only CCamSlicerPlugIn object
 static class CCamSlicerPlugIn thePlugIn;

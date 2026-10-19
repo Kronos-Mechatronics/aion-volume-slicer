@@ -10,11 +10,11 @@ public:
     ~CamSlicer() = default;
     // override class information
     // name of this cam block type
-    virtual std::string getTypeName() const override { return "Demo"; };
+    virtual std::string getTypeName() const override { return "Slicer"; };
     // short description of this cam block type
-    virtual std::string getTypeShortDescription() const override { return "CamSlicer example"; }
+    virtual std::string getTypeShortDescription() const override { return "Slice a volumetric object"; }
     // Optional url to documentation for this cam block type.
-    virtual std::string getDocumentationUrl() const override { return "https://example.com"; }
+    virtual std::string getDocumentationUrl() const override { return "https://documentation.kronos-mct.com/aion/latest/cam/volume/"; }
     // factory method to create a new instance of this cam block type
     virtual Aion::CamBase* createNewInstance() const override;
 

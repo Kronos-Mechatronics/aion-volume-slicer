@@ -5,7 +5,7 @@
 
 CamSlicer::CamSlicer(const ON_UUID& plugin_uuid)
     : CamBase("Unnamed CamSlicer",                                    // Default name of this cam block, as displayed in the list.
-        ON_UuidFromString(L"31108A39-8E67-46AC-8D24-23523FFEAE01"), // Replace with a unique UUID to identify this cam block type. This UUID can never be changed after release.
+        ON_UuidFromString(L"6DB9405E-BC94-498E-877C-E427D8288C5B"), // Replace with a unique UUID to identify this cam block type. This UUID can never be changed after release.
         plugin_uuid)
 {
     // Initialize config options for this cam block.
