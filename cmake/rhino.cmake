@@ -62,13 +62,19 @@ target_compile_options(config_target INTERFACE
 
 target_link_options(config_target INTERFACE
     $<$<CONFIG:Debug>:
-        /INCREMENTAL;
         /DEBUG
     >
-    $<$<CONFIG:Release>:
-        /INCREMENTAL:NO
-    >
     /IGNORE:4042 # ignore "cmake_pch.obj : warning LNK4042: object specified more than once" warnings. I do not fully understand why they are thrown, but afaik the pch object is actually exactly used as intended and everythings works.
+    /IGNORE:4075 # ignore "/INCREMENTAL ignoring /FORCE" warnings
+    /NODEFAULTLIB:libcmt.lib # Ignore static C-runtime; we want dynamic /MD runtime instead
+    /NODEFAULTLIB:libcmtd.lib # Ignore debug static C-runtime
+    /FORCE:MULTIPLE # Allow multiple definitions of symbols (MFC and Boost.Thread both manage DLL entry point; MFC's definition wins)
+)
+
+# Link system libraries
+target_link_libraries(config_target INTERFACE
+    kernel32.lib
+    user32.lib
 )
 
 target_link_options(${PROJECT_NAME} PRIVATE /SUBSYSTEM:WINDOWS)

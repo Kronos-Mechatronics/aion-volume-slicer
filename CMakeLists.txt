@@ -165,6 +165,7 @@ set(Slicerdeps_d
     "${PRUSASLICER_LIBRARY_DIR}/tbb12_debug.lib"
     "${PRUSASLICER_LIBRARY_DIR}/tbbmalloc.lib"
     "${PRUSASLICER_LIBRARY_DIR}/zlib.lib"
+    "${PRUSASLICER_LIBRARY_DIR}/jpeg-static.lib"
 )
 
 # Add the include directories to libslic3r target
