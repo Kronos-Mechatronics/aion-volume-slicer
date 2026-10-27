@@ -4,20 +4,6 @@
 #include "InteractiveSelection.h"
 #include "Geometry5X.h"
 
-enum OrientationMode : unsigned char {
-    vector_mode,
-    surface_mode
-};
-
-// Helper function instead of static data to avoid delay-load issues from Aion-5X.rhp
-inline const std::map<std::string, int>& GetOrientationModeStringMap() {
-    static const std::map<std::string, int> map{
-        {"Vector", vector_mode},
-        {"Surface", surface_mode}
-    };
-    return map;
-}
-
 enum SlicerConfigMode : unsigned char {
     path_mode,
     string_mode
@@ -41,23 +27,12 @@ CamSlicer::CamSlicer(const ON_UUID& plugin_uuid)
     m_volume_components->label = "Volumes";
     m_volume_components->tooltip = "Structures to be printed";
 
-    m_orientation_mode = new Aion::ConfigOptionEnum(0, &GetOrientationModeStringMap());
-    this->m_options.addOption("orientationMode", m_orientation_mode);
-    m_orientation_mode->label = "Orientation mode";
-    m_orientation_mode->tooltip = "Select the orientation mode for the toolpath \n Surface: Choose the orientation based on a surface \n Vector: Enter a orientation vector";
-
-    m_surface_component = new Aion::ConfigOptionComponentVector();
-    m_surface_component->label = "Surface";
-    m_surface_component->tooltip = "Surface objects to automatically determine tool orientation";
-
-    m_orientation_vector = new Aion::ConfigOptionPoint(ON_3dPoint(0, 0, 1));
+    m_orientation_vector = new Aion::ConfigOptionDirection(ON_3dVector::ZAxis);
+    this->m_options.addOption("orientationVector", m_orientation_vector);
     m_orientation_vector->label = "Orientation vector";
-    m_orientation_vector->tooltip = "Manual orientation vector for the toolpath";
+    m_orientation_vector->tooltip = "Slicing direction (build direction) of the volumes";
     m_orientation_vector->unit = "";
-    m_orientation_vector->digits = 2;
-    m_orientation_vector->min = -1.0;
-    m_orientation_vector->max = 1.0;
-    m_orientation_vector->increment = 0.1;
+    m_orientation_vector->digits = 3;
 
     m_tool = new Aion::ConfigOptionTool();
     this->m_options.addOption("tool", m_tool);
@@ -153,10 +128,10 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
         return true;
     }
 
-    // orientation options valid?
-    int orientation_mode = m_orientation_mode->getInt();
-    if (orientation_mode == OrientationMode::surface && m_surface_component->getComponents()->empty()) {
-        errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "No reference surface given for orientation."));
+    // orientation vector valid?
+    ON_3dVector dir = m_orientation_vector->getVector();
+    if (!dir.Unitize()) {
+        errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Orientation vector must not be zero."));
         return false;
     }
 
@@ -198,14 +173,6 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
         on_meshes.reserve(m_volume_components->getComponents()->size());
         for (Aion::Component& comp : *m_volume_components->getComponents()) {
             on_meshes.emplace_back(createNurbsMesh(comp));
-        }
-
-        ON_3dVector dir = ON_3dVector::ZAxis;
-        if (m_orientation_mode->getInt() == OrientationMode::vector) {
-            dir = m_orientation_vector->getPoint();
-        }
-        if (m_orientation_mode->getInt() == OrientationMode::surface) {
-
         }
 
         ON_BoundingBox init_bbox;
@@ -324,13 +291,7 @@ Aion::OptionsGroups CamSlicer::getOptionsByGroup()
         Aion::OptionsGroup group_geometry;
         group_geometry.name = "Geometry";
         group_geometry.options.push_back(m_volume_components);
-        group_geometry.options.push_back(m_orientation_mode);
-        if (m_orientation_mode->getInt() == OrientationMode::surface) {
-            group_geometry.options.push_back(m_surface_component);
-        }
-        if (m_orientation_mode->getInt() == OrientationMode::surface) {
-            group_geometry.options.push_back(m_orientation_vector);
-        }
+        group_geometry.options.push_back(m_orientation_vector);
         result.push_back(group_geometry);
     }
 
@@ -348,20 +309,12 @@ void CamSlicer::onOptionChanged(const Aion::ConfigOptionBase* option, bool reset
         Aion::InteractiveSelection::interactiveVolumeSelection(*components);
     }
 
-    // orientation reference geometries
-    if (option == m_surface_component && !reset) {
-        std::vector<Aion::Component>* components = m_surface_component->getComponents();
-        // Select curves
-        Aion::InteractiveSelection::interactiveSurfaceSelection(*components);
-    }
-
-    if (option == m_orientation_mode) {
-        if (m_orientation_mode->getInt() != OrientationMode::surface) {
-            // clear the surface components because the mode is not surface anymore
-            std::vector<Aion::Component>* surfComponents = m_surface_component->getComponents();
-            if (surfComponents->size() > 0) {
-                surfComponents->clear();
-            }
+    if (option == m_orientation_vector && m_orientation_vector->pick_requested) {
+        m_orientation_vector->pick_requested = false;
+        // Select direction (surface normal or two points)
+        ON_3dVector direction;
+        if (Aion::InteractiveSelection::interactiveDirectionSelection(direction) == CRhinoGet::point) {
+            *m_orientation_vector = direction;
         }
     }
 
@@ -384,17 +337,6 @@ void CamSlicer::onObjectChanged(const ON_UUID& uuid, ON::object_type type, bool 
             change = true;
             if (deleted) {
                 it = m_volume_components->getComponents()->erase(it);
-                continue; // continue to the next iteration
-            }
-        }
-        it++;
-    }
-
-    for (auto it = m_surface_component->getComponents()->begin(); it != m_surface_component->getComponents()->end();) {
-        if (it->uuid == uuid) {
-            change = true;
-            if (deleted) {
-                it = m_surface_component->getComponents()->erase(it);
                 continue; // continue to the next iteration
             }
         }

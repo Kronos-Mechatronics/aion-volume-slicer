@@ -60,12 +60,8 @@ public:
 private:
 	// Components of the volume structure object in the Rhino scene
 	Aion::ConfigOptionComponentVector* m_volume_components;
-	// Collection of all options for orientation of the tool
-	Aion::ConfigOptionEnum* m_orientation_mode;
-	// Component of the surface structure object in the Rhino scene
-	Aion::ConfigOptionComponentVector* m_surface_component;
-	// 
-	Aion::ConfigOptionPoint* m_orientation_vector;
+	// Slicing direction (build direction) of the volumes
+	Aion::ConfigOptionDirection* m_orientation_vector;
 	//
 	Aion::ConfigOptionEnum* m_slicer_config_mode;
 	//
