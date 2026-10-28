@@ -4,18 +4,79 @@
 #include "InteractiveSelection.h"
 #include "Geometry5X.h"
 
-enum SlicerConfigMode : unsigned char {
-    path_mode,
-    string_mode
+// Baseline PrusaSlicer config, shipped next to the plugin .rhp
+static const wchar_t* BASELINE_CONFIG_FILENAME = L"Aion_prusa_config.ini";
+
+// Infill patterns: UI label -> PrusaSlicer "fill_pattern" key. The index is the enum value of the option.
+static const std::vector<std::pair<std::string, std::string>> INFILL_PATTERNS{
+    {"Rectilinear", "rectilinear"},
+    {"Aligned Rectilinear", "alignedrectilinear"},
+    {"Grid", "grid"},
+    {"Triangles", "triangles"},
+    {"Stars", "stars"},
+    {"Cubic", "cubic"},
+    {"Line", "line"},
+    {"Concentric", "concentric"},
+    {"Honeycomb", "honeycomb"},
+    {"3D Honeycomb", "3dhoneycomb"},
+    {"Gyroid", "gyroid"},
+    {"Hilbert Curve", "hilbertcurve"},
+    {"Archimedean Chords", "archimedeanchords"},
+    {"Octagram Spiral", "octagramspiral"},
+    {"Adaptive Cubic", "adaptivecubic"},
+    {"Support Cubic", "supportcubic"},
+    {"Lightning", "lightning"},
+    {"Zig Zag", "zigzag"},
+};
+static const int DEFAULT_INFILL_PATTERN = 2; // Grid
+
+// Helper function instead of static data to avoid delay-load issues from Aion-5X.rhp
+inline const std::map<std::string, int>& GetInfillPatternStringMap() {
+    static const std::map<std::string, int> map = [] {
+        std::map<std::string, int> result;
+        for (int i = 0; i < (int)INFILL_PATTERNS.size(); i++) {
+            result[INFILL_PATTERNS[i].first] = i;
+        }
+        return result;
+    }();
+    return map;
+}
+
+enum PerimeterGenerator : unsigned char {
+    arachne,
+    classic
 };
 
 // Helper function instead of static data to avoid delay-load issues from Aion-5X.rhp
-inline const std::map<std::string, int>& GetConfigModeStringMap() {
+inline const std::map<std::string, int>& GetPerimeterGeneratorStringMap() {
     static const std::map<std::string, int> map{
-        {"Path", path_mode},
-        {"String", string_mode}
+        {"Arachne", arachne},
+        {"Classic", classic}
     };
     return map;
+}
+
+// PrusaSlicer extrusion width keys, all set to the width of the CAM block
+static const std::vector<const char*> EXTRUSION_WIDTH_KEYS{
+    "extrusion_width",
+    "first_layer_extrusion_width",
+    "perimeter_extrusion_width",
+    "external_perimeter_extrusion_width",
+    "infill_extrusion_width",
+    "solid_infill_extrusion_width",
+    "top_infill_extrusion_width",
+    "support_material_extrusion_width",
+};
+
+// Directory of this plugin's .rhp file
+static std::filesystem::path getPluginDirectory()
+{
+    HMODULE module = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        reinterpret_cast<LPCWSTR>(&getPluginDirectory), &module);
+    wchar_t buffer[MAX_PATH];
+    GetModuleFileNameW(module, buffer, MAX_PATH);
+    return std::filesystem::path(buffer).parent_path();
 }
 
 CamSlicer::CamSlicer(const ON_UUID& plugin_uuid)
@@ -45,40 +106,283 @@ CamSlicer::CamSlicer(const ON_UUID& plugin_uuid)
     this->m_options.addOption("lastTool", m_last_tool);
     m_last_tool->detail_level = Aion::ConfigDetailLevel::levelInvisible;
 
-    m_slicer_config_mode = new Aion::ConfigOptionEnum(0, &GetConfigModeStringMap());
-    this->m_options.addOption("configMode", m_slicer_config_mode);
-    m_slicer_config_mode->label = "Config mode";
-    m_slicer_config_mode->tooltip = "Select the config mode for the Slicer \n Path: Use the \".ini\" config file (absolute path) \n String: Use the config file string";
+    // Extrusion parameters
+    m_width = new Aion::ConfigOptionFloat(0.4);
+    this->m_options.addOption("width", m_width);
+    m_width->label = "Width";
+    m_width->tooltip = "Extrusion width";
+    m_width->unit = "mm";
+    m_width->min = 0.0;
+    m_width->increment = 0.1;
 
-    m_slicer_config_path = new Aion::ConfigOptionString();
-    this->m_options.addOption("slicerConfigPath", m_slicer_config_path);
-    m_slicer_config_path->label = "Config path";
-    m_slicer_config_path->tooltip = "Path to Slicer config \".ini\" file";
+    m_height = new Aion::ConfigOptionFloat(0.2);
+    this->m_options.addOption("height", m_height);
+    m_height->label = "Height";
+    m_height->tooltip = "Layer height";
+    m_height->unit = "mm";
+    m_height->min = 0.0;
+    m_height->increment = 0.1;
 
-    m_slicer_config_string = new Aion::ConfigOptionString();
-    this->m_options.addOption("slicerConfigString", m_slicer_config_string);
-    m_slicer_config_string->label = "Config string";
-    m_slicer_config_string->tooltip = "Slicer config string from \".ini\" file";
-    m_slicer_config_string->multiline = true;
+    m_first_layer_height = new Aion::ConfigOptionFloat(0.2);
+    this->m_options.addOption("firstLayerHeight", m_first_layer_height);
+    m_first_layer_height->label = "First layer height";
+    m_first_layer_height->tooltip = "Height of the first layer.";
+    m_first_layer_height->unit = "mm";
+    m_first_layer_height->min = 0.0;
+    m_first_layer_height->increment = 0.1;
+    m_first_layer_height->detail_level = Aion::ConfigDetailLevel::levelTwo;
 
-    m_last_slicer_config_path = new Aion::ConfigOptionString();
-    this->m_options.addOption("lastSlicerConfig", m_last_slicer_config_path);
-    m_last_slicer_config_path->detail_level = Aion::ConfigDetailLevel::levelInvisible;
+    m_speed = new Aion::ConfigOptionFloat(20.0);
+    this->m_options.addOption("speed", m_speed);
+    m_speed->label = "Print speed";
+    m_speed->tooltip = "Base print speed. The speeds of the individual extrusion types are percentages of this value.";
+    m_speed->unit = "mm/s";
+    m_speed->min = 0.0;
+    m_speed->increment = 5.0;
 
-    m_support = new Aion::ConfigOptionBool();
+    m_speed_factors = new Aion::ConfigOptionContainer("<Edit>", "Edit speed factors", ON_Color(0, 0, 0));
+    this->m_options.addOption("speedFactors", m_speed_factors);
+    m_speed_factors->label = "Speed factors";
+    m_speed_factors->tooltip = "Speeds of the individual extrusion types in % of the print speed";
+    m_speed_factors->detail_level = Aion::ConfigDetailLevel::levelTwo;
+    // Only append to the container, its deserialization depends on the order of the options.
+    m_perimeter_speed = new Aion::ConfigOptionPercent(100.0);
+    m_speed_factors->addOption("perimeters", m_perimeter_speed);
+    m_perimeter_speed->label = "Perimeters";
+    m_perimeter_speed->tooltip = "Perimeter speed in % of the print speed";
+    m_perimeter_speed->max = 1000.0;
+    m_perimeter_speed->min = 0.1;
+    m_perimeter_speed->increment = 10.0;
+
+    m_small_perimeter_speed = new Aion::ConfigOptionPercent(80.0);
+    m_speed_factors->addOption("smallPerimeters", m_small_perimeter_speed);
+    m_small_perimeter_speed->label = "Small perimeters";
+    m_small_perimeter_speed->tooltip = "Small perimeter speed in % of the print speed";
+    m_small_perimeter_speed->max = 1000.0;
+    m_small_perimeter_speed->min = 0.1;
+    m_small_perimeter_speed->increment = 10.0;
+
+    m_external_perimeter_speed = new Aion::ConfigOptionPercent(80.0);
+    m_speed_factors->addOption("externalPerimeters", m_external_perimeter_speed);
+    m_external_perimeter_speed->label = "External perimeters";
+    m_external_perimeter_speed->tooltip = "External perimeter speed in % of the print speed";
+    m_external_perimeter_speed->max = 1000.0;
+    m_external_perimeter_speed->min = 0.1;
+    m_external_perimeter_speed->increment = 10.0;
+
+    m_infill_speed = new Aion::ConfigOptionPercent(150.0);
+    m_speed_factors->addOption("infill", m_infill_speed);
+    m_infill_speed->label = "Infill";
+    m_infill_speed->tooltip = "Infill speed in % of the print speed";
+    m_infill_speed->max = 1000.0;
+    m_infill_speed->min = 0.1;
+    m_infill_speed->increment = 10.0;
+
+    m_solid_infill_speed = new Aion::ConfigOptionPercent(150.0);
+    m_speed_factors->addOption("solidInfill", m_solid_infill_speed);
+    m_solid_infill_speed->label = "Solid infill";
+    m_solid_infill_speed->tooltip = "Solid infill speed in % of the print speed";
+    m_solid_infill_speed->max = 1000.0;
+    m_solid_infill_speed->min = 0.1;
+    m_solid_infill_speed->increment = 10.0;
+
+    m_top_solid_infill_speed = new Aion::ConfigOptionPercent(100.0);
+    m_speed_factors->addOption("topSolidInfill", m_top_solid_infill_speed);
+    m_top_solid_infill_speed->label = "Top solid infill";
+    m_top_solid_infill_speed->tooltip = "Top solid infill speed in % of the print speed";
+    m_top_solid_infill_speed->max = 1000.0;
+    m_top_solid_infill_speed->min = 0.1;
+    m_top_solid_infill_speed->increment = 10.0;
+
+    m_support_speed = new Aion::ConfigOptionPercent(100.0);
+    m_speed_factors->addOption("support", m_support_speed);
+    m_support_speed->label = "Support";
+    m_support_speed->tooltip = "Support speed in % of the print speed";
+    m_support_speed->max = 1000.0;
+    m_support_speed->min = 0.1;
+    m_support_speed->increment = 10.0;
+
+    m_support_interface_speed = new Aion::ConfigOptionPercent(100.0);
+    m_speed_factors->addOption("supportInterface", m_support_interface_speed);
+    m_support_interface_speed->label = "Support interface";
+    m_support_interface_speed->tooltip = "Support interface speed in % of the print speed";
+    m_support_interface_speed->max = 1000.0;
+    m_support_interface_speed->min = 0.1;
+    m_support_interface_speed->increment = 10.0;
+
+    m_bridge_speed = new Aion::ConfigOptionPercent(50.0);
+    m_speed_factors->addOption("bridges", m_bridge_speed);
+    m_bridge_speed->label = "Bridges";
+    m_bridge_speed->tooltip = "Bridge speed in % of the print speed";
+    m_bridge_speed->max = 1000.0;
+    m_bridge_speed->min = 0.1;
+    m_bridge_speed->increment = 10.0;
+
+    m_over_bridge_speed = new Aion::ConfigOptionPercent(80.0);
+    m_speed_factors->addOption("overBridges", m_over_bridge_speed);
+    m_over_bridge_speed->label = "Over bridges";
+    m_over_bridge_speed->tooltip = "Speed of the layers above bridges in % of the print speed";
+    m_over_bridge_speed->max = 1000.0;
+    m_over_bridge_speed->min = 0.1;
+    m_over_bridge_speed->increment = 10.0;
+
+    m_gap_fill_speed = new Aion::ConfigOptionPercent(50.0);
+    m_speed_factors->addOption("gapFill", m_gap_fill_speed);
+    m_gap_fill_speed->label = "Gap fill";
+    m_gap_fill_speed->tooltip = "Gap fill speed in % of the print speed";
+    m_gap_fill_speed->max = 1000.0;
+    m_gap_fill_speed->min = 0.1;
+    m_gap_fill_speed->increment = 10.0;
+
+    // Filling options
+    m_perimeters = new Aion::ConfigOptionInt(3);
+    this->m_options.addOption("perimeters", m_perimeters);
+    m_perimeters->label = "Perimeter loops";
+    m_perimeters->tooltip = "Number of perimeter loops";
+    m_perimeters->min = 0;
+
+    m_perimeter_generator = new Aion::ConfigOptionEnum(PerimeterGenerator::arachne, &GetPerimeterGeneratorStringMap());
+    this->m_options.addOption("perimeterGenerator", m_perimeter_generator);
+    m_perimeter_generator->label = "Perimeter generator";
+    m_perimeter_generator->tooltip = "Arachne: variable extrusion width to fill thin walls and gaps\nClassic: constant extrusion width";
+    m_perimeter_generator->detail_level = Aion::ConfigDetailLevel::levelTwo;
+
+    m_vase_mode = new Aion::ConfigOptionBool(false);
+    this->m_options.addOption("vaseMode", m_vase_mode);
+    m_vase_mode->label = "Vase mode";
+    m_vase_mode->tooltip = "Print only a single perimeter without top layers, infill and supports";
+    m_vase_mode->detail_level = Aion::ConfigDetailLevel::levelTwo;
+
+    m_top_layers = new Aion::ConfigOptionInt(5);
+    this->m_options.addOption("topLayers", m_top_layers);
+    m_top_layers->label = "Top layers";
+    m_top_layers->tooltip = "Number of solid layers at the top";
+    m_top_layers->min = 0;
+    m_top_layers->detail_level = Aion::ConfigDetailLevel::levelTwo;
+
+    m_bottom_layers = new Aion::ConfigOptionInt(4);
+    this->m_options.addOption("bottomLayers", m_bottom_layers);
+    m_bottom_layers->label = "Bottom layers";
+    m_bottom_layers->tooltip = "Number of solid layers at the bottom";
+    m_bottom_layers->min = 0;
+    m_bottom_layers->detail_level = Aion::ConfigDetailLevel::levelTwo;
+
+    m_infill_density = new Aion::ConfigOptionPercent(15.0);
+    this->m_options.addOption("infillDensity", m_infill_density);
+    m_infill_density->label = "Infill";
+    m_infill_density->tooltip = "Density of the sparse infill";
+    m_infill_density->increment = 5.0;
+
+    m_infill_pattern = new Aion::ConfigOptionEnum(DEFAULT_INFILL_PATTERN, &GetInfillPatternStringMap());
+    this->m_options.addOption("infillPattern", m_infill_pattern);
+    m_infill_pattern->label = "Infill pattern";
+    m_infill_pattern->tooltip = "Pattern of the sparse infill";
+    m_infill_pattern->detail_level = Aion::ConfigDetailLevel::levelTwo;
+
+    // Other
+    m_support = new Aion::ConfigOptionBool(false);
     this->m_options.addOption("support", m_support);
-    m_support->label = "Generate supports";
-    m_support->tooltip = "Should supports be generated for objects in this CAM-Block?\nOnly use for structures on the printbed.";
+    m_support->label = "Support";
+    m_support->tooltip = "Generate supports for this CAM-Block.\nOnly use for structures on the printbed.";
 
-    m_brim = new Aion::ConfigOptionBool();
-    this->m_options.addOption("brim", m_brim);
-    m_brim->label = "Generate brim";
-    m_brim->tooltip = "Should a brim be generated for objects in this CAM-Block?\nOnly use for structures on the printbed.";
+    m_brim_width = new Aion::ConfigOptionFloat(0.0);
+    this->m_options.addOption("brimWidth", m_brim_width);
+    m_brim_width->label = "Brim";
+    m_brim_width->tooltip = "Width of the brim around the first layer. 0 disables the brim.\nOnly use for structures on the printbed.";
+    m_brim_width->unit = "mm";
+    m_brim_width->min = 0.0;
+    m_brim_width->detail_level = Aion::ConfigDetailLevel::levelTwo;
 
-    m_skirt = new Aion::ConfigOptionBool();
-    this->m_options.addOption("skirt", m_skirt);
-    m_skirt->label = "Generate skirt";
-    m_skirt->tooltip = "Should a skirt be generated for objects in this CAM-Block?\nOnly use for structures on the printbed.";
+    m_slicer_options = new Aion::ConfigOptionString();
+    this->m_options.addOption("slicerOptions", m_slicer_options);
+    m_slicer_options->label = "Configuration options";
+    m_slicer_options->tooltip = "Additional PrusaSlicer options in \".ini\" format (one \"key = value\" per line).\nThey are applied last and overwrite all other settings.";
+    m_slicer_options->multiline = true;
+    m_slicer_options->detail_level = Aion::ConfigDetailLevel::levelTwo;
+}
+
+void CamSlicer::applyConfigOptionsToSlicerConfig(Slic3r::DynamicPrintConfig& s_config)
+{
+    const double width = m_width->getFloat();
+    for (const char* key : EXTRUSION_WIDTH_KEYS) {
+        s_config.set_deserialize_strict({ { key, width } });
+    }
+    
+    s_config.set_deserialize_strict({
+        { "layer_height", m_height->getFloat() },
+        { "first_layer_height", m_first_layer_height->getFloat() },
+    });
+
+    // all speeds are absolute values relative to the print speed
+    const double speed = m_speed->getFloat() / 100.0;
+    s_config.set_deserialize_strict({
+        { "perimeter_speed", speed * m_perimeter_speed->getFloat() },
+        { "small_perimeter_speed", speed * m_small_perimeter_speed->getFloat() },
+        { "external_perimeter_speed", speed * m_external_perimeter_speed->getFloat() },
+        { "infill_speed", speed * m_infill_speed->getFloat() },
+        { "solid_infill_speed", speed * m_solid_infill_speed->getFloat() },
+        { "top_solid_infill_speed", speed * m_top_solid_infill_speed->getFloat() },
+        { "support_material_speed", speed * m_support_speed->getFloat() },
+        { "support_material_interface_speed", speed * m_support_interface_speed->getFloat() },
+        { "bridge_speed", speed * m_bridge_speed->getFloat() },
+        { "over_bridge_speed", speed * m_over_bridge_speed->getFloat() },
+        { "gap_fill_speed", speed * m_gap_fill_speed->getFloat() },
+    });
+
+    s_config.set_deserialize_strict({
+        { "perimeters", m_perimeters->getInt() },
+        { "perimeter_generator", m_perimeter_generator->getInt() == PerimeterGenerator::classic ? "classic" : "arachne" },
+        { "top_solid_layers", m_top_layers->getInt() },
+        { "bottom_solid_layers", m_bottom_layers->getInt() },
+        { "fill_density", m_infill_density->serialize() },
+        { "fill_pattern", INFILL_PATTERNS.at(m_infill_pattern->getInt()).second },
+        { "support_material", m_support->getBool() },
+        { "brim_width", m_brim_width->getFloat() },
+        { "spiral_vase", m_vase_mode->getBool() },
+    });
+
+    if (m_vase_mode->getBool()) {
+        // same overrides as PrusaSlicer applies for spiral vase mode
+        s_config.set_deserialize_strict({
+            { "perimeters", 1 },
+            { "top_solid_layers", 0 },
+            { "fill_density", "0%" },
+            { "support_material", false },
+        });
+    }
+}
+
+bool CamSlicer::loadSlicerConfig(Slic3r::DynamicPrintConfig& s_config, Aion::Errorlist& errors)
+{
+    // PrusaSlicer defaults, overlaid with the shipped baseline config
+    s_config = Slic3r::DynamicPrintConfig::full_print_config();
+    const std::filesystem::path baseline_path = getPluginDirectory() / BASELINE_CONFIG_FILENAME;
+    if (std::filesystem::exists(baseline_path)) {
+        try {
+            s_config.load_from_ini(baseline_path.u8string(), Slic3r::ForwardCompatibilitySubstitutionRule::EnableSilent);
+        }
+        catch (const std::exception& exc) {
+            s_config = Slic3r::DynamicPrintConfig::full_print_config();
+            errors.push_back(Aion::Error(Aion::ErrorClass::Warning, std::string("Could not read baseline slicer config, PrusaSlicer defaults are used: ") + exc.what()));
+        }
+    }
+    else {
+        errors.push_back(Aion::Error(Aion::ErrorClass::Info, "Baseline slicer config not found, PrusaSlicer defaults are used."));
+    }
+
+    applyConfigOptionsToSlicerConfig(s_config);
+
+    // user defined options overwrite everything else
+    if (!m_slicer_options->getString().empty()) {
+        try {
+            s_config.load_from_ini_string(m_slicer_options->getString(), Slic3r::ForwardCompatibilitySubstitutionRule::EnableSilent);
+        }
+        catch (const std::exception& exc) {
+            errors.push_back(Aion::Error(Aion::ErrorClass::Warning, std::string("Could not parse configuration options: ") + exc.what()));
+            return false;
+        }
+    }
+    return true;
 }
 
 Aion::CamBase* CamSlicer::createNewInstance() const
@@ -104,24 +408,6 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
         return false;
     }
 
-    if (m_slicer_config_mode->getInt() == SlicerConfigMode::path_mode) {
-        std::filesystem::path path(m_slicer_config_path->getString());
-        if (m_slicer_config_path->getString().empty()) {
-            errors.push_back(Aion::Error(Aion::ErrorClass::Info, "No config file selected. A standard config will be used."));
-        }
-        else {
-            if (!path.is_absolute() || path.filename().string().find(".ini") == -1) {
-                errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Path is no absolute path to \".ini\" file. A standard config will be used."));
-            }
-        }
-    }
-
-    if (m_slicer_config_mode->getInt() == SlicerConfigMode::string_mode) {
-        if (m_slicer_config_string->getString().empty()) {
-            errors.push_back(Aion::Error(Aion::ErrorClass::Info, "No config string given. A standard config will be used."));
-        }
-    }
-
     // Check if there are components
     if (m_volume_components->getComponents()->empty()) {
         errors.push_back(Aion::Error(Aion::ErrorClass::Info, "No volume selected"));
@@ -142,31 +428,9 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
         Slic3r::ModelObject* s_mo_ptr = s_model.add_object();
         s_mo_ptr->add_instance();
 
-        Slic3r::DynamicPrintConfig s_config = Slic3r::DynamicPrintConfig::full_print_config();
-
-        std::filesystem::path path(m_slicer_config_path->getString());
-        if (m_slicer_config_mode->getInt() == SlicerConfigMode::path_mode &&
-            path.is_absolute() && path.filename().string().find(".ini") != -1) {
-            s_config.load_from_ini(m_slicer_config_path->getString(), Slic3r::ForwardCompatibilitySubstitutionRule::EnableSilent);
-        }
-        if (m_slicer_config_mode->getInt() == SlicerConfigMode::string_mode &&
-            !m_slicer_config_string->getString().empty()) {
-            s_config.load_from_ini_string(m_slicer_config_string->getString(), Slic3r::ForwardCompatibilitySubstitutionRule::EnableSilent);
-        }
-
-        if (m_support->getBool() == false) {
-            //auto* opt = s_config.option("support_material", false);
-            //opt->set(new Slic3r::ConfigOptionBool(false));
-            //s_config.set_deserialize("support_material", "false");
-            s_config.set_key_value("support_material", new Slic3r::ConfigOptionBool(false)) ? RhinoApp().Print(L"sup key created\n") : RhinoApp().Print(L"sup key overwritten\n");
-        }
-
-        if (m_brim->getBool() == false) {
-            s_config.set_key_value("brim_type", new Slic3r::ConfigOptionEnum<Slic3r::BrimType>(Slic3r::BrimType::btNoBrim)) ? RhinoApp().Print(L"brim key created\n") : RhinoApp().Print(L"brim key overwritten\n");
-        }
-
-        if (m_skirt->getBool() == false) {
-            s_config.set_key_value("skirts", new Slic3r::ConfigOptionInt(0)) ? RhinoApp().Print(L"skirt key created\n") : RhinoApp().Print(L"skirt key overwritten\n");
+        Slic3r::DynamicPrintConfig s_config;
+        if (!loadSlicerConfig(s_config, errors)) {
+            return false;
         }
 
         std::vector<std::unique_ptr<ON_Mesh>> on_meshes;
@@ -274,25 +538,38 @@ Aion::OptionsGroups CamSlicer::getOptionsByGroup()
     result.push_back(group_tool);
 
     if (!m_tool->getString().empty()) {
-        Aion::OptionsGroup group_slicer;
-        group_slicer.name = "Slicer";
-        group_slicer.options.push_back(m_slicer_config_mode);
-        if (m_slicer_config_mode->getInt() == SlicerConfigMode::path_mode) {
-            group_slicer.options.push_back(m_slicer_config_path);
-        }
-        if (m_slicer_config_mode->getInt() == SlicerConfigMode::string_mode) {
-            group_slicer.options.push_back(m_slicer_config_string);
-        }
-        group_slicer.options.push_back(m_support);
-        group_slicer.options.push_back(m_brim);
-        group_slicer.options.push_back(m_skirt);
-        result.push_back(group_slicer);
-
         Aion::OptionsGroup group_geometry;
         group_geometry.name = "Geometry";
         group_geometry.options.push_back(m_volume_components);
         group_geometry.options.push_back(m_orientation_vector);
         result.push_back(group_geometry);
+
+        Aion::OptionsGroup group_extrusion;
+        group_extrusion.name = "Extrusion parameters";
+        group_extrusion.options.push_back(m_width);
+        group_extrusion.options.push_back(m_height);
+        group_extrusion.options.push_back(m_first_layer_height);
+        group_extrusion.options.push_back(m_speed);
+        group_extrusion.options.push_back(m_speed_factors);
+        result.push_back(group_extrusion);
+
+        Aion::OptionsGroup group_filling;
+        group_filling.name = "Filling options";
+        group_filling.options.push_back(m_perimeters);
+        group_filling.options.push_back(m_perimeter_generator);
+        group_filling.options.push_back(m_vase_mode);
+        group_filling.options.push_back(m_top_layers);
+        group_filling.options.push_back(m_bottom_layers);
+        group_filling.options.push_back(m_infill_density);
+        group_filling.options.push_back(m_infill_pattern);
+        result.push_back(group_filling);
+
+        Aion::OptionsGroup group_other;
+        group_other.name = "Other";
+        group_other.options.push_back(m_support);
+        group_other.options.push_back(m_brim_width);
+        group_other.options.push_back(m_slicer_options);
+        result.push_back(group_other);
     }
 
     return result;
@@ -323,6 +600,19 @@ void CamSlicer::onOptionChanged(const Aion::ConfigOptionBase* option, bool reset
         const Aion::ToolConfig* tool_config = getConfig()->getTool(m_tool);
         const Aion::ToolConfig* last_tool_config = getConfig()->getTool(m_last_tool);
         bool force_update = m_last_tool->getString().empty(); // if no last tool was selected, we force the update
+
+        if (tool_config) {
+            // the first layer height follows the tool height unless the user changed it from the last tool's default
+            bool update_first_layer = force_update || !last_tool_config ||
+                fabs(m_first_layer_height->getFloat() - last_tool_config->tool_height()) < slicerEPS;
+
+            // update options with order: height, width, speed, point feedrate
+            updateToolPresets(tool_config, last_tool_config, force_update, m_height, m_width, m_speed, nullptr);
+
+            if (update_first_layer) {
+                *m_first_layer_height = tool_config->tool_height();
+            }
+        }
 
         // set the last tool to the current tool
         m_last_tool->deserialize(m_tool->getString());
@@ -499,7 +789,7 @@ void CamSlicer::processEntityCollection(const Slic3r::ExtrusionEntityCollection&
     //iterate the extrusion entities of the collection
     for (Slic3r::ExtrusionEntity* s_entity : s_collection) {
         Aion::ToolpathPath* const path_ptr = new Aion::ToolpathPath(tool_config);
-        path_ptr->speed = tool_config->tool_speed();
+        path_ptr->speed = m_speed->getFloat();
         if (isExtrusionPath(s_entity)) {
             const Slic3r::ExtrusionPath* s_path_ptr = dynamic_cast<const Slic3r::ExtrusionPath*>(s_entity);
             createToolpathForSlicerpath(path_ptr, s_path_ptr, path_z, transform, dir, s_config);

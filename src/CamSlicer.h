@@ -55,6 +55,13 @@ public:
 
 	void createFlatCollectionFromLayer(const Slic3r::Layer* s_layer, Slic3r::ExtrusionEntityCollection& collection);
 
+	// build the slicer config: PrusaSlicer defaults < baseline .ini < cam block options < user config options
+	// returns false if the user config options could not be parsed
+	bool loadSlicerConfig(Slic3r::DynamicPrintConfig& s_config, Aion::Errorlist& errors);
+
+	// write the options of this cam block into the slicer config
+	void applyConfigOptionsToSlicerConfig(Slic3r::DynamicPrintConfig& s_config);
+
 	void processEntityCollection(const Slic3r::ExtrusionEntityCollection& s_collection, double path_z, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, const Slic3r::DynamicPrintConfig& s_config);
 
 private:
@@ -62,24 +69,45 @@ private:
 	Aion::ConfigOptionComponentVector* m_volume_components;
 	// Slicing direction (build direction) of the volumes
 	Aion::ConfigOptionDirection* m_orientation_vector;
-	//
-	Aion::ConfigOptionEnum* m_slicer_config_mode;
-	//
-	Aion::ConfigOptionString* m_slicer_config_path;
-	//
-	Aion::ConfigOptionString* m_last_slicer_config_path;
-	// 
-	Aion::ConfigOptionString* m_slicer_config_string;
-	// 
-	Aion::ConfigOptionString* m_last_slicer_config_string;
 	// Config option for the tool
 	Aion::ConfigOptionTool* m_tool;
 	// Config option to save the last used tool (not in the UI)
 	Aion::ConfigOptionTool* m_last_tool;
 
+	// Extrusion parameters
+	Aion::ConfigOptionFloat* m_width;
+	Aion::ConfigOptionFloat* m_height;
+	Aion::ConfigOptionFloat* m_first_layer_height;
+	// Base print speed
+	Aion::ConfigOptionFloat* m_speed;
+	// Container for the speeds per extrusion type in % of m_speed
+	Aion::ConfigOptionContainer* m_speed_factors;
+	Aion::ConfigOptionPercent* m_perimeter_speed;
+	Aion::ConfigOptionPercent* m_small_perimeter_speed;
+	Aion::ConfigOptionPercent* m_external_perimeter_speed;
+	Aion::ConfigOptionPercent* m_infill_speed;
+	Aion::ConfigOptionPercent* m_solid_infill_speed;
+	Aion::ConfigOptionPercent* m_top_solid_infill_speed;
+	Aion::ConfigOptionPercent* m_support_speed;
+	Aion::ConfigOptionPercent* m_support_interface_speed;
+	Aion::ConfigOptionPercent* m_bridge_speed;
+	Aion::ConfigOptionPercent* m_over_bridge_speed;
+	Aion::ConfigOptionPercent* m_gap_fill_speed;
+
+	// Filling options
+	Aion::ConfigOptionInt* m_perimeters;
+	Aion::ConfigOptionEnum* m_perimeter_generator;
+	Aion::ConfigOptionBool* m_vase_mode;
+	Aion::ConfigOptionInt* m_top_layers;
+	Aion::ConfigOptionInt* m_bottom_layers;
+	Aion::ConfigOptionPercent* m_infill_density;
+	Aion::ConfigOptionEnum* m_infill_pattern;
+
+	// Other
 	Aion::ConfigOptionBool* m_support;
-	Aion::ConfigOptionBool* m_brim;
-	Aion::ConfigOptionBool* m_skirt;
+	Aion::ConfigOptionFloat* m_brim_width;
+	// Additional PrusaSlicer options in .ini format, applied last
+	Aion::ConfigOptionString* m_slicer_options;
 	// small epsilon to compare if points are equal.
     double slicerEPS = 0.0001;
 };

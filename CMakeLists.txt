@@ -208,6 +208,7 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E copy
     ${PRUSASLICER_LIBGMP_DLL}
     ${PRUSASLICER_LIBMPFR_DLL}
+    "${CMAKE_CURRENT_SOURCE_DIR}/res/Aion_prusa_config.ini"
     $<TARGET_FILE_DIR:${PROJECT_NAME}>
   COMMAND_EXPAND_LISTS
 )
