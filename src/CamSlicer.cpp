@@ -435,8 +435,19 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
 
         std::vector<std::unique_ptr<ON_Mesh>> on_meshes;
         on_meshes.reserve(m_volume_components->getComponents()->size());
-        for (Aion::Component& comp : *m_volume_components->getComponents()) {
-            on_meshes.emplace_back(createNurbsMesh(comp));
+        bool meshes_valid = true;
+        for (const Aion::Component& comp : *m_volume_components->getComponents()) {
+            std::unique_ptr<ON_Mesh> on_mesh = Aion::Geometry5X::createNurbsMesh(comp, errors, ON_MeshParameters::DefaultAnalysisMesh);
+            if (on_mesh) {
+                on_meshes.emplace_back(std::move(on_mesh));
+            }
+            else {
+                meshes_valid = false;
+            }
+        }
+        // mesh all volumes first, so that the errors of all invalid volumes are reported at once
+        if (!meshes_valid) {
+            return false;
         }
 
         ON_BoundingBox init_bbox;
@@ -637,28 +648,6 @@ void CamSlicer::onObjectChanged(const ON_UUID& uuid, ON::object_type type, bool 
     if (change) {
         setNeedsPathplanning(true);
     }
-}
-
-std::unique_ptr<ON_Mesh> CamSlicer::createNurbsMesh(Aion::Component& comp, ON_MeshParameters mesh_params) {
-    auto on_mesh = std::make_unique<ON_Mesh>();
-    const CRhinoObject* r_object = CRhinoObject::FromId(0, comp.uuid);
-    const ON_Geometry* on_ptr = r_object->Geometry();
-    if (on_ptr->HasBrepForm()) {
-        ON_Brep* on_brep_ptr = on_ptr->BrepForm();
-        ON_SimpleArray<ON_Mesh*> on_meshes;
-        int n_meshes = on_brep_ptr->CreateMesh(mesh_params, on_meshes);
-        on_mesh->Append(n_meshes, on_meshes);
-        on_mesh->ConvertQuadsToTriangles();
-        ON_wString log;
-        ON_TextLog textLog(log);
-        if (!on_mesh->IsValid(&textLog)) {
-            RhinoApp().Print(L"The mesh is not valid:\n%s\n", log.Array());
-        }
-    }
-    else {
-        RhinoApp().Print("This component has no ON_Brep representation:\n%s\n", comp.uuid);
-    }
-    return on_mesh;
 }
 
 std::unique_ptr<Slic3r::TriangleMesh> CamSlicer::createSlicerMesh(const ON_Mesh* on_mesh) {

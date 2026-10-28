@@ -37,10 +37,6 @@ public:
     // Respond to modified geometry in the document
     void onObjectChanged(const ON_UUID& uuid, ON::object_type type, bool deleted) override;
 
-    // Custom methods for the libslic3r integration
-	// create a ON_Mesh of a given Component
-	std::unique_ptr<ON_Mesh> createNurbsMesh(Aion::Component& comp, ON_MeshParameters mesh_params = ON_MeshParameters::DefaultMesh);
-
 	// create a Slic3r::TriangleMesh of a given ON_Mesh
 	std::unique_ptr<Slic3r::TriangleMesh> createSlicerMesh(const ON_Mesh* on_mesh);
 
