@@ -392,26 +392,55 @@ bool CamSlicer::loadSlicerConfig(Slic3r::DynamicPrintConfig& s_config, Aion::Err
 }
 
 // Generate the Slic3r TriangleMesh from the Rhino ON_Mesh
-// @param on_mesh: pointer to the Rhino ON_Mesh to convert
-// @return unique pointer to the Slic3r TriangleMesh
-std::unique_ptr<Slic3r::TriangleMesh> _createSlicerMesh(const ON_Mesh* on_mesh) {
-    ON_3fPointArray on_vertices = on_mesh->m_V;
-    std::vector<Slic3r::Vec3f> s_vertices;
-    s_vertices.reserve(on_vertices.Count());
-    for (int i = 0; i < on_vertices.Count(); i++) {
-        ON_3fPoint* on_vert = on_vertices.At(i);
-        s_vertices.emplace_back(Slic3r::Vec3f(on_vert->x, on_vert->y, on_vert->z));
+// Quads are split into two triangles and inside out meshes are flipped.
+// @param on_mesh: the Rhino ON_Mesh to convert
+// @param s_mesh[out]: the created Slic3r TriangleMesh
+// @param errors[out]: a warning is added if the mesh can not be converted, an info if it has open or non-manifold edges
+// @return false if the mesh could not be converted
+bool _createSlicerMesh(const ON_Mesh& on_mesh, Slic3r::TriangleMesh& s_mesh, Aion::Errorlist& errors) {
+    const int vertex_count = on_mesh.VertexCount();
+    // the double precision vertices are more accurate, but only usable if they are in sync with the float vertices
+    const bool use_double_vertices = on_mesh.HasSynchronizedDoubleAndSinglePrecisionVertices();
+
+    indexed_triangle_set s_its;
+    s_its.vertices.reserve(vertex_count);
+    for (int i = 0; i < vertex_count; i++) {
+        const ON_3dPoint on_vert = use_double_vertices ? on_mesh.m_dV[i] : ON_3dPoint(on_mesh.m_V[i]);
+        if (!on_vert.IsValid()) {
+            errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Slicer object has invalid mesh vertices."));
+            return false;
+        }
+        s_its.vertices.emplace_back(float(on_vert.x), float(on_vert.y), float(on_vert.z));
     }
 
-    ON_SimpleArray<ON_MeshFace> on_faces = on_mesh->m_F;
-    std::vector<Slic3r::Vec3i> s_faces;
-    s_faces.reserve(on_faces.Count());
-    for (int i = 0; i < on_faces.Count(); i++) {
-        ON_MeshFace* on_face = on_faces.At(i);
-        s_faces.emplace_back(Slic3r::Vec3i(on_face->vi[0], on_face->vi[1], on_face->vi[2]));
+    s_its.indices.reserve(on_mesh.FaceCount() + on_mesh.QuadCount());
+    for (int i = 0; i < on_mesh.FaceCount(); i++) {
+        const ON_MeshFace& on_face = on_mesh.m_F[i];
+        // out of range indices would crash in PrusaSlicer without an exception
+        if (!on_face.IsValid(vertex_count)) {
+            errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Slicer object has invalid mesh faces."));
+            return false;
+        }
+        s_its.indices.emplace_back(on_face.vi[0], on_face.vi[1], on_face.vi[2]);
+        if (on_face.IsQuad()) {
+            s_its.indices.emplace_back(on_face.vi[0], on_face.vi[2], on_face.vi[3]);
+        }
     }
 
-    return std::make_unique<Slic3r::TriangleMesh>(s_vertices, s_faces);
+    s_mesh = Slic3r::TriangleMesh(std::move(s_its));
+    if (s_mesh.empty()) {
+        errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Slicer object could not be meshed, the mesh is empty."));
+        return false;
+    }
+    // PrusaSlicer expects outward facing normals, inside out meshes have a negative volume
+    if (s_mesh.stats().volume < 0) {
+        s_mesh.flip_triangles();
+    }
+    // open meshes are already reported by createNurbsMesh, only report the non-manifold edges of closed meshes
+    if (!s_mesh.stats().manifold() && on_mesh.IsClosed()) {
+        errors.push_back(Aion::Error(Aion::ErrorClass::Info, "Slicer object has " + std::to_string(s_mesh.stats().open_edges) + " non-manifold edges. Slicing results may be incomplete."));
+    }
+    return true;
 }
 
 // Get the speed for a given extrusion role from the Slic3r DynamicPrintConfig
@@ -661,8 +690,11 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
         // Create slicer Meshes from the ON_Meshes and add them to the Slic3r model
         for (std::unique_ptr<ON_Mesh>& on_mesh_ptr : on_meshes) {
             on_mesh_ptr->Translate(ON_3dPoint::Origin - point);
-            auto s_mesh_ptr = _createSlicerMesh(on_mesh_ptr.get());
-            s_mo_ptr->add_volume(*s_mesh_ptr.get());
+            Slic3r::TriangleMesh s_mesh;
+            if (!_createSlicerMesh(*on_mesh_ptr, s_mesh, errors)) {
+                return false;
+            }
+            s_mo_ptr->add_volume(std::move(s_mesh));
         }
 
         // Process the Slic3r model to generate the toolpaths
