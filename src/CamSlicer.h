@@ -37,28 +37,29 @@ public:
     // Respond to modified geometry in the document
     void onObjectChanged(const ON_UUID& uuid, ON::object_type type, bool deleted) override;
 
-	// create a Slic3r::TriangleMesh of a given ON_Mesh
-	std::unique_ptr<Slic3r::TriangleMesh> createSlicerMesh(const ON_Mesh* on_mesh);
-
 	bool isExtrusionPath(const Slic3r::ExtrusionEntity* e) { return dynamic_cast<const Slic3r::ExtrusionPath*>(e) != nullptr; }
 	bool isExtrusionMultiPath(const Slic3r::ExtrusionEntity* e) { return dynamic_cast<const Slic3r::ExtrusionMultiPath*>(e) != nullptr; }
 	bool isExtrusionLoop(const Slic3r::ExtrusionEntity* e) { return e->is_loop(); }
 
-	// convert and add Slic3r::ExtrusionPath the ToolpathPath
-	void createToolpathForSlicerpath(Aion::ToolpathPath* const path_ptr, const Slic3r::ExtrusionPath* s_path_ptr, double path_z, const ON_Xform& transform, const ON_3dVector& dir, const Slic3r::DynamicPrintConfig& s_config);
-
-	double getSpeedForExtrusionRole(Slic3r::ExtrusionRole& s_role, bool is_first_layer, const Slic3r::DynamicPrintConfig& s_config);
-
-	void createFlatCollectionFromLayer(const Slic3r::Layer* s_layer, Slic3r::ExtrusionEntityCollection& collection);
-
+private:
+    // Apply the options of this cam block to the slicer config
+    // @param s_config: reference to the slicer config to apply the options to
+	void applyConfigOptionsToSlicerConfig(Slic3r::DynamicPrintConfig& s_config);
 	// build the slicer config: PrusaSlicer defaults < baseline .ini < cam block options < user config options
-	// returns false if the user config options could not be parsed
+    // @param s_config: reference to the slicer config to build
+    // @param errors: reference to error list to append errors/warnings/info messages
+    // @return true if the slicer config was built successfully, false otherwise
 	bool loadSlicerConfig(Slic3r::DynamicPrintConfig& s_config, Aion::Errorlist& errors);
 
-	// write the options of this cam block into the slicer config
-	void applyConfigOptionsToSlicerConfig(Slic3r::DynamicPrintConfig& s_config);
-
+	// convert each extrusion entity (path, multipath or loop) of a flat collection into one ToolpathPath with wiping at start and end.
+	// path_z is the layer height in slicer coordinates, transform maps slicer coordinates back into the Rhino scene.
+	// if a path does not start where the previous toolpath ended, a ToolpathTravel is inserted that lifts 1 mm along
+	// the tool direction, moves above the start of the next path and approaches it. The results are appended to m_toolpaths.
 	void processEntityCollection(const Slic3r::ExtrusionEntityCollection& s_collection, double path_z, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, const Slic3r::DynamicPrintConfig& s_config);
+
+	// collect all extrusion entities of a layer into one flat collection (no nested collections).
+	// support layers contribute their support fills, object layers the perimeters followed by the fills of each region.
+	void createFlatCollectionFromLayer(const Slic3r::Layer* s_layer, Slic3r::ExtrusionEntityCollection& collection);
 
 private:
 	// Components of the volume structure object in the Rhino scene

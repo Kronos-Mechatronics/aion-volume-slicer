@@ -301,6 +301,12 @@ CamSlicer::CamSlicer(const ON_UUID& plugin_uuid)
     m_slicer_options->detail_level = Aion::ConfigDetailLevel::levelTwo;
 }
 
+Aion::CamBase* CamSlicer::createNewInstance() const
+{
+    CamSlicer* result = new CamSlicer(this->getPluginUuid());
+    return result;
+}
+
 void CamSlicer::applyConfigOptionsToSlicerConfig(Slic3r::DynamicPrintConfig& s_config)
 {
     const double width = m_width->getFloat();
@@ -385,10 +391,199 @@ bool CamSlicer::loadSlicerConfig(Slic3r::DynamicPrintConfig& s_config, Aion::Err
     return true;
 }
 
-Aion::CamBase* CamSlicer::createNewInstance() const
+// Generate the Slic3r TriangleMesh from the Rhino ON_Mesh
+// @param on_mesh: pointer to the Rhino ON_Mesh to convert
+// @return unique pointer to the Slic3r TriangleMesh
+std::unique_ptr<Slic3r::TriangleMesh> _createSlicerMesh(const ON_Mesh* on_mesh) {
+    ON_3fPointArray on_vertices = on_mesh->m_V;
+    std::vector<Slic3r::Vec3f> s_vertices;
+    s_vertices.reserve(on_vertices.Count());
+    for (int i = 0; i < on_vertices.Count(); i++) {
+        ON_3fPoint* on_vert = on_vertices.At(i);
+        s_vertices.emplace_back(Slic3r::Vec3f(on_vert->x, on_vert->y, on_vert->z));
+    }
+
+    ON_SimpleArray<ON_MeshFace> on_faces = on_mesh->m_F;
+    std::vector<Slic3r::Vec3i> s_faces;
+    s_faces.reserve(on_faces.Count());
+    for (int i = 0; i < on_faces.Count(); i++) {
+        ON_MeshFace* on_face = on_faces.At(i);
+        s_faces.emplace_back(Slic3r::Vec3i(on_face->vi[0], on_face->vi[1], on_face->vi[2]));
+    }
+
+    return std::make_unique<Slic3r::TriangleMesh>(s_vertices, s_faces);
+}
+
+// Get the speed for a given extrusion role from the Slic3r DynamicPrintConfig
+// @param s_role: Slic3r ExtrusionRole to get the speed for
+// @param is_first_layer: whether the path is on the first layer
+// @param s_config: Slic3r DynamicPrintConfig to get the speeds from
+// @return the speed for the given extrusion role
+double _getSpeedForExtrusionRole(Slic3r::ExtrusionRole& s_role, bool is_first_layer, const Slic3r::DynamicPrintConfig& s_config) {
+    double speed;
+    if (s_role == Slic3r::ExtrusionRole::Perimeter) {
+        speed = s_config.get_abs_value("perimeter_speed");
+    }
+    else if (s_role == Slic3r::ExtrusionRole::ExternalPerimeter) {
+        speed = s_config.get_abs_value("external_perimeter_speed");
+    }
+    else if (s_role.is_bridge()) {
+        assert(s_role.is_perimeter() || s_role == Slic3r::ExtrusionRole::BridgeInfill);
+        speed = s_config.get_abs_value("bridge_speed");
+    }
+    else if (s_role == Slic3r::ExtrusionRole::InternalInfill) {
+        speed = s_config.get_abs_value("infill_speed");
+    }
+    else if (s_role == Slic3r::ExtrusionRole::SolidInfill) {
+        speed = s_config.get_abs_value("solid_infill_speed");
+    }
+    else if (s_role == Slic3r::ExtrusionRole::SupportMaterial) {
+        speed = s_config.get_abs_value("support_material_speed");
+    }
+    else if (s_role == Slic3r::ExtrusionRole::SupportMaterialInterface) {
+        speed = s_config.get_abs_value("support_material_interface_speed");
+    }
+    else if (s_role == Slic3r::ExtrusionRole::Skirt) {
+        speed = s_config.get_abs_value("support_material_speed");
+    }
+    else if (s_role == Slic3r::ExtrusionRole::InfillOverBridge) {
+        const double solid_infill_speed = s_config.get_abs_value("solid_infill_speed");
+        const double over_bridge_speed{ s_config.get_abs_value("over_bridge_speed", solid_infill_speed) };
+        if (over_bridge_speed > 0) {
+            speed = over_bridge_speed;
+        }
+        else {
+            speed = solid_infill_speed;
+        }
+    }
+    else if (s_role == Slic3r::ExtrusionRole::TopSolidInfill) {
+        speed = s_config.get_abs_value("top_solid_infill_speed");
+    }
+    else if (s_role == Slic3r::ExtrusionRole::Ironing) {
+        speed = s_config.get_abs_value("ironing_speed");
+    }
+    else if (s_role == Slic3r::ExtrusionRole::GapFill) {
+        speed = s_config.get_abs_value("gap_fill_speed");
+    }
+    else {
+        throw Slic3r::InvalidArgument("Invalid speed");
+    }
+    if (is_first_layer) {
+        const double first_layer_infill_speed{ s_config.get_abs_value("first_layer_infill_speed", speed) };
+        if (s_role == Slic3r::ExtrusionRole::SolidInfill && first_layer_infill_speed > 0) {
+            speed = first_layer_infill_speed;
+        }
+        else {
+            speed = s_config.get_abs_value("first_layer_speed", speed);
+        }
+    }
+    return speed;
+}
+
+// Create a ToolpathPath from a Slic3r ExtrusionPath
+// @param path_ptr: pointer to the ToolpathPath to fill
+// @param s_path_ptr: pointer to the Slic3r ExtrusionPath to convert
+// @param path_z: Z height of the path
+// @param transform: transformation to apply to the points
+// @param dir: direction vector to apply to the points
+// @param s_config: Slic3r DynamicPrintConfig to get the speeds from
+void _createToolpathForSlicerpath(Aion::ToolpathPath* const path_ptr, const Slic3r::ExtrusionPath* s_path_ptr, double path_z, const ON_Xform& transform, const ON_3dVector& dir, const Slic3r::DynamicPrintConfig& s_config) {
+    double s_path_height = s_path_ptr->height();
+    double s_path_width = s_path_ptr->width();
+    double s_path_volume = s_path_ptr->mm3_per_mm();
+
+    for (const Slic3r::Point& s_point : s_path_ptr->polyline) {
+        ON_3dPoint on_point = ON_Point(Slic3r::unscale<double>(s_point.x()), Slic3r::unscale<double>(s_point.y()), path_z);
+        on_point.Transform(transform);
+        if (!path_ptr->hasToolpathPoints() || path_ptr->getLastPoint()->getPoint() != on_point) {
+            path_ptr->appendPoint(on_point, dir);
+        }
+        path_ptr->getLastPoint()->setWidth(s_path_width, s_path_height);
+        path_ptr->getLastPoint()->setmm3_per_mm(s_path_volume);
+        bool is_first_layer = false;
+        if (path_z < 0.01) {
+            is_first_layer = true;
+        }
+        if (s_path_ptr->role().is_perimeter() && s_path_ptr->length() <= SMALL_PERIMETER_LENGTH) {
+            path_ptr->getLastPoint()->setSpeed(s_config.get_abs_value("small_perimeter_speed", s_config.get_abs_value("perimeter_speed")));
+        }
+        else {
+            path_ptr->getLastPoint()->setSpeed(_getSpeedForExtrusionRole(s_path_ptr->role(), is_first_layer, s_config));
+        }
+    }
+}
+
+void CamSlicer::processEntityCollection(const Slic3r::ExtrusionEntityCollection& s_collection, double path_z, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, const Slic3r::DynamicPrintConfig& s_config)
 {
-    CamSlicer* result = new CamSlicer(this->getPluginUuid());
-    return result;
+    //iterate the extrusion entities of the collection
+    for (Slic3r::ExtrusionEntity* s_entity : s_collection) {
+        Aion::ToolpathPath* const path_ptr = new Aion::ToolpathPath(tool_config);
+        path_ptr->speed = m_speed->getFloat();
+        if (isExtrusionPath(s_entity)) {
+            const Slic3r::ExtrusionPath* s_path_ptr = dynamic_cast<const Slic3r::ExtrusionPath*>(s_entity);
+            _createToolpathForSlicerpath(path_ptr, s_path_ptr, path_z, transform, dir, s_config);
+        }
+        else if (isExtrusionMultiPath(s_entity)) {
+            const Slic3r::ExtrusionMultiPath* s_mpath_ptr = dynamic_cast<const Slic3r::ExtrusionMultiPath*>(s_entity);
+            for (const Slic3r::ExtrusionPath& s_path : s_mpath_ptr->paths) {
+                _createToolpathForSlicerpath(path_ptr, &s_path, path_z, transform, dir, s_config);
+            }
+        }
+        else if (isExtrusionLoop(s_entity)) {
+            const Slic3r::ExtrusionLoop* s_loop_ptr = dynamic_cast<const Slic3r::ExtrusionLoop*>(s_entity);
+            for (const Slic3r::ExtrusionPath& s_path : s_loop_ptr->paths) {
+                _createToolpathForSlicerpath(path_ptr, &s_path, path_z, transform, dir, s_config);
+            }
+        }
+        else {
+            RhinoApp().Print("Unhandled ExtrusionEntityType encountered at layer height: %f.\n", path_z);
+        }
+
+        this->generateWiping(path_ptr, true);
+        this->generateWiping(path_ptr, false);
+
+        if (!m_toolpaths.empty() && m_toolpaths.back()->hasToolpathPoints() && path_ptr->hasToolpathPoints()) {
+            Aion::ToolpathElement& last = m_toolpaths.back()->getToolpathPoints()->back();
+            if (last.getPoint().DistanceTo(path_ptr->getFirstPoint()->getPoint()) > slicerEPS) {
+                Aion::ToolpathTravel* travel = new Aion::ToolpathTravel(tool_config);
+                ON_3dPoint from_p = last.getPoint();
+                ON_3dVector from_v = last.getNormalIn();
+                travel->appendPoint(from_p, from_v);
+                from_v.Unitize();
+                from_p.Transform(ON_Xform::TranslationTransformation(from_v));
+                travel->appendPoint(from_p, last.getNormalIn());
+                ON_3dPoint to_p = path_ptr->getFirstPoint()->getPoint();
+                ON_3dVector to_v = path_ptr->getFirstPoint()->getNormalIn();
+                to_v.Unitize();
+                to_p.Transform(ON_Xform::TranslationTransformation(to_v));
+                travel->appendPoint(to_p, path_ptr->getFirstPoint()->getNormalIn());
+                travel->appendPoint(path_ptr->getFirstPoint()->getPoint(), path_ptr->getFirstPoint()->getNormalIn());
+
+                travel->height = last.getHeight();
+                travel->getLastPoint()->setWidth(path_ptr->getFirstPoint()->getWidth(), path_ptr->getFirstPoint()->getHeight());
+
+                travel->speed = getConfig()->machineConfig().travel_feedrate();
+                m_toolpaths.emplace_back(travel);
+            }
+        }
+        m_toolpaths.emplace_back(path_ptr);
+    }
+}
+
+void CamSlicer::createFlatCollectionFromLayer(const Slic3r::Layer* s_layer, Slic3r::ExtrusionEntityCollection& collection)
+{
+    const Slic3r::SupportLayer* sup_layer = dynamic_cast<const Slic3r::SupportLayer*>(s_layer);
+    if (sup_layer) {
+        collection = sup_layer->support_fills.flatten();
+    }
+    else {
+        Slic3r::ExtrusionEntityCollection tmp;
+        for (Slic3r::LayerRegion* region : s_layer->regions()) {
+            tmp.append(region->perimeters().flatten());
+            tmp.append(region->fills().flatten());
+        }
+        collection = tmp.flatten();
+    }
 }
 
 bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
@@ -421,74 +616,68 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
         return false;
     }
 
+    // Mesh all the selected objects and collect the ON_Meshes
+    std::vector<std::unique_ptr<ON_Mesh>> on_meshes;
+    on_meshes.reserve(m_volume_components->getComponents()->size());
+    for (const Aion::Component& comp : *m_volume_components->getComponents()) {
+        std::unique_ptr<ON_Mesh> on_mesh = Aion::Geometry5X::createNurbsMesh(comp, errors, ON_MeshParameters::DefaultAnalysisMesh);
+        if (on_mesh) {
+            on_meshes.emplace_back(std::move(on_mesh));
+        }
+        else {
+            return false; // error already reported in createNurbsMesh
+        }
+    }
+
+    // Compute the bounding box of all meshes and calculate the rotation and translation place them on the print bed.
+    ON_BoundingBox init_bbox;
+    for (std::unique_ptr<ON_Mesh>& on_mesh_ptr : on_meshes) {
+        init_bbox.Union(on_mesh_ptr->BoundingBox());
+    }
+    ON_Xform rot_xform;
+    rot_xform.Rotation(dir, ON_3dVector::ZAxis, init_bbox.Center());
+    ON_BoundingBox rot_bbox;
+    for (std::unique_ptr<ON_Mesh>& on_mesh_ptr : on_meshes) {
+        on_mesh_ptr->Transform(rot_xform);
+        rot_bbox.Union(on_mesh_ptr->BoundingBox());
+    }
+    ON_3dPoint point = rot_bbox.Center();
+    point.z = rot_bbox.Min().z;
+    ON_Xform transform = ON_Xform::TranslationTransformation(ON_3dPoint::Origin - point) * rot_xform;
+    transform.Invert();
+
     try {
+        // Create a Slic3r model and print
         Slic3r::Model s_model;
         Slic3r::Print s_print;
-
         Slic3r::ModelObject* s_mo_ptr = s_model.add_object();
         s_mo_ptr->add_instance();
-
+        // Get create the slicer config from the initial config and the options of this cam block
         Slic3r::DynamicPrintConfig s_config;
         if (!loadSlicerConfig(s_config, errors)) {
             return false;
         }
-
-        std::vector<std::unique_ptr<ON_Mesh>> on_meshes;
-        on_meshes.reserve(m_volume_components->getComponents()->size());
-        bool meshes_valid = true;
-        for (const Aion::Component& comp : *m_volume_components->getComponents()) {
-            std::unique_ptr<ON_Mesh> on_mesh = Aion::Geometry5X::createNurbsMesh(comp, errors, ON_MeshParameters::DefaultAnalysisMesh);
-            if (on_mesh) {
-                on_meshes.emplace_back(std::move(on_mesh));
-            }
-            else {
-                meshes_valid = false;
-            }
-        }
-        // mesh all volumes first, so that the errors of all invalid volumes are reported at once
-        if (!meshes_valid) {
-            return false;
-        }
-
-        ON_BoundingBox init_bbox;
-        for (std::unique_ptr<ON_Mesh>& on_mesh_ptr : on_meshes) {
-            init_bbox.Union(on_mesh_ptr->BoundingBox());
-        }
-
-        ON_Xform rot_xform;
-        rot_xform.Rotation(dir, ON_3dVector::ZAxis, init_bbox.Center());
-
-        ON_BoundingBox rot_bbox;
-
-        for (std::unique_ptr<ON_Mesh>& on_mesh_ptr : on_meshes) {
-            on_mesh_ptr->Transform(rot_xform);
-            rot_bbox.Union(on_mesh_ptr->BoundingBox());
-        }
-
-        ON_3dPoint point = rot_bbox.Center();
-        point.z = rot_bbox.Min().z;
-
-        ON_Xform transform = ON_Xform::TranslationTransformation(ON_3dPoint::Origin - point) * rot_xform;
-        transform.Invert();
-
+        
+        // Create slicer Meshes from the ON_Meshes and add them to the Slic3r model
         for (std::unique_ptr<ON_Mesh>& on_mesh_ptr : on_meshes) {
             on_mesh_ptr->Translate(ON_3dPoint::Origin - point);
-            auto s_mesh_ptr = createSlicerMesh(on_mesh_ptr.get());
+            auto s_mesh_ptr = _createSlicerMesh(on_mesh_ptr.get());
             s_mo_ptr->add_volume(*s_mesh_ptr.get());
         }
 
+        // Process the Slic3r model to generate the toolpaths
         s_print.apply(s_model, s_config);
         s_print.process();
 
+        // Generate possible skirt and brim paths
         if (s_print.has_skirt()) {
             processEntityCollection(s_print.skirt().flatten(), 0, tool_config, transform, dir, s_config);
         }
-
         if (s_print.has_brim()) {
             processEntityCollection(s_print.brim().flatten(), 0, tool_config, transform, dir, s_config);
         }
 
-        //iterate over objects in print
+        //iterate over objects in print and layers in object to generate toolpaths
         for (const Slic3r::PrintObject* s_po : s_print.objects()) {
             const Slic3r::SupportLayer* const* sup_it = s_po->support_layers().begin();
             const Slic3r::SupportLayer* const* sup_end = s_po->support_layers().end();
@@ -500,6 +689,7 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
             const Slic3r::Layer* const* lay_it = s_po->layers().begin();
             const Slic3r::Layer* const* lay_end = s_po->layers().end();
             while (sup_it != sup_end || lay_it != lay_end) {
+                // set the z height of the next support layer, if there is one, otherwise set it to INT_MAX
                 if (sup_it && sup_it != sup_end) {
                     sup_z = (*sup_it)->bottom_z();
                 }
@@ -507,6 +697,7 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
                     sup_z = INT_MAX;
                 }
                 Slic3r::ExtrusionEntityCollection col;
+                // process the next layer, either support or normal, depending on which one has the lower z height
                 if (sup_z <= (*lay_it)->bottom_z()) {
                     createFlatCollectionFromLayer(*sup_it, col);
                     processEntityCollection(col, (*sup_it)->bottom_z(), tool_config, transform, dir, s_config);
@@ -647,185 +838,5 @@ void CamSlicer::onObjectChanged(const ON_UUID& uuid, ON::object_type type, bool 
     // if we need to recalculate, we set the flag
     if (change) {
         setNeedsPathplanning(true);
-    }
-}
-
-std::unique_ptr<Slic3r::TriangleMesh> CamSlicer::createSlicerMesh(const ON_Mesh* on_mesh) {
-    ON_3fPointArray on_vertices = on_mesh->m_V;
-    std::vector<Slic3r::Vec3f> s_vertices;
-    s_vertices.reserve(on_vertices.Count());
-    for (int i = 0; i < on_vertices.Count(); i++) {
-        ON_3fPoint* on_vert = on_vertices.At(i);
-        s_vertices.emplace_back(Slic3r::Vec3f(on_vert->x, on_vert->y, on_vert->z));
-    }
-
-    ON_SimpleArray<ON_MeshFace> on_faces = on_mesh->m_F;
-    std::vector<Slic3r::Vec3i> s_faces;
-    s_faces.reserve(on_faces.Count());
-    for (int i = 0; i < on_faces.Count(); i++) {
-        ON_MeshFace* on_face = on_faces.At(i);
-        s_faces.emplace_back(Slic3r::Vec3i(on_face->vi[0], on_face->vi[1], on_face->vi[2]));
-    }
-
-    return std::make_unique<Slic3r::TriangleMesh>(s_vertices, s_faces);
-}
-
-void CamSlicer::createToolpathForSlicerpath(Aion::ToolpathPath* const path_ptr, const Slic3r::ExtrusionPath* s_path_ptr, double path_z, const ON_Xform& transform, const ON_3dVector& dir, const Slic3r::DynamicPrintConfig& s_config) {
-    double s_path_height = s_path_ptr->height();
-    double s_path_width = s_path_ptr->width();
-    double s_path_volume = s_path_ptr->mm3_per_mm();
-
-    for (const Slic3r::Point& s_point : s_path_ptr->polyline) {
-        ON_3dPoint on_point = ON_Point(Slic3r::unscale<double>(s_point.x()), Slic3r::unscale<double>(s_point.y()), path_z);
-        on_point.Transform(transform);
-        if (!path_ptr->hasToolpathPoints() || path_ptr->getLastPoint()->getPoint() != on_point) {
-            path_ptr->appendPoint(on_point, dir);
-        }
-        path_ptr->getLastPoint()->setWidth(s_path_width, s_path_height);
-        path_ptr->getLastPoint()->setmm3_per_mm(s_path_volume);
-        bool is_first_layer = false;
-        if (path_z < 0.01) {
-            is_first_layer = true;
-        }
-        if (s_path_ptr->role().is_perimeter() && s_path_ptr->length() <= SMALL_PERIMETER_LENGTH) {
-            path_ptr->getLastPoint()->setSpeed(s_config.get_abs_value("small_perimeter_speed", s_config.get_abs_value("perimeter_speed")));
-        }
-        else {
-            path_ptr->getLastPoint()->setSpeed(getSpeedForExtrusionRole(s_path_ptr->role(), is_first_layer, s_config));
-        }
-    }
-}
-
-double CamSlicer::getSpeedForExtrusionRole(Slic3r::ExtrusionRole& s_role, bool is_first_layer, const Slic3r::DynamicPrintConfig& s_config) {
-    double speed;
-    if (s_role == Slic3r::ExtrusionRole::Perimeter) {
-        speed = s_config.get_abs_value("perimeter_speed");
-    }
-    else if (s_role == Slic3r::ExtrusionRole::ExternalPerimeter) {
-        speed = s_config.get_abs_value("external_perimeter_speed");
-    }
-    else if (s_role.is_bridge()) {
-        assert(s_role.is_perimeter() || s_role == Slic3r::ExtrusionRole::BridgeInfill);
-        speed = s_config.get_abs_value("bridge_speed");
-    }
-    else if (s_role == Slic3r::ExtrusionRole::InternalInfill) {
-        speed = s_config.get_abs_value("infill_speed");
-    }
-    else if (s_role == Slic3r::ExtrusionRole::SolidInfill) {
-        speed = s_config.get_abs_value("solid_infill_speed");
-    }
-    else if (s_role == Slic3r::ExtrusionRole::SupportMaterial) {
-        speed = s_config.get_abs_value("support_material_speed");
-    }
-    else if (s_role == Slic3r::ExtrusionRole::SupportMaterialInterface) {
-        speed = s_config.get_abs_value("support_material_interface_speed");
-    }
-    else if (s_role == Slic3r::ExtrusionRole::Skirt) {
-        speed = s_config.get_abs_value("support_material_speed");
-    }
-    else if (s_role == Slic3r::ExtrusionRole::InfillOverBridge) {
-        const double solid_infill_speed = s_config.get_abs_value("solid_infill_speed");
-        const double over_bridge_speed{ s_config.get_abs_value("over_bridge_speed", solid_infill_speed) };
-        if (over_bridge_speed > 0) {
-            speed = over_bridge_speed;
-        }
-        else {
-            speed = solid_infill_speed;
-        }
-    }
-    else if (s_role == Slic3r::ExtrusionRole::TopSolidInfill) {
-        speed = s_config.get_abs_value("top_solid_infill_speed");
-    }
-    else if (s_role == Slic3r::ExtrusionRole::Ironing) {
-        speed = s_config.get_abs_value("ironing_speed");
-    }
-    else if (s_role == Slic3r::ExtrusionRole::GapFill) {
-        speed = s_config.get_abs_value("gap_fill_speed");
-    }
-    else {
-        throw Slic3r::InvalidArgument("Invalid speed");
-    }
-    if (is_first_layer) {
-        const double first_layer_infill_speed{ s_config.get_abs_value("first_layer_infill_speed", speed) };
-        if (s_role == Slic3r::ExtrusionRole::SolidInfill && first_layer_infill_speed > 0) {
-            speed = first_layer_infill_speed;
-        }
-        else {
-            speed = s_config.get_abs_value("first_layer_speed", speed);
-        }
-    }
-    return speed;
-}
-
-void CamSlicer::createFlatCollectionFromLayer(const Slic3r::Layer* s_layer, Slic3r::ExtrusionEntityCollection& collection)
-{
-    const Slic3r::SupportLayer* sup_layer = dynamic_cast<const Slic3r::SupportLayer*>(s_layer);
-    if (sup_layer) {
-        collection = sup_layer->support_fills.flatten();
-    }
-    else {
-        Slic3r::ExtrusionEntityCollection tmp;
-        for (Slic3r::LayerRegion* region : s_layer->regions()) {
-            tmp.append(region->perimeters().flatten());
-            tmp.append(region->fills().flatten());
-        }
-        collection = tmp.flatten();
-    }
-}
-
-void CamSlicer::processEntityCollection(const Slic3r::ExtrusionEntityCollection& s_collection, double path_z, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, const Slic3r::DynamicPrintConfig& s_config)
-{
-    //iterate the extrusion entities of the collection
-    for (Slic3r::ExtrusionEntity* s_entity : s_collection) {
-        Aion::ToolpathPath* const path_ptr = new Aion::ToolpathPath(tool_config);
-        path_ptr->speed = m_speed->getFloat();
-        if (isExtrusionPath(s_entity)) {
-            const Slic3r::ExtrusionPath* s_path_ptr = dynamic_cast<const Slic3r::ExtrusionPath*>(s_entity);
-            createToolpathForSlicerpath(path_ptr, s_path_ptr, path_z, transform, dir, s_config);
-        }
-        else if (isExtrusionMultiPath(s_entity)) {
-            const Slic3r::ExtrusionMultiPath* s_mpath_ptr = dynamic_cast<const Slic3r::ExtrusionMultiPath*>(s_entity);
-            for (const Slic3r::ExtrusionPath& s_path : s_mpath_ptr->paths) {
-                createToolpathForSlicerpath(path_ptr, &s_path, path_z, transform, dir, s_config);
-            }
-        }
-        else if (isExtrusionLoop(s_entity)) {
-            const Slic3r::ExtrusionLoop* s_loop_ptr = dynamic_cast<const Slic3r::ExtrusionLoop*>(s_entity);
-            for (const Slic3r::ExtrusionPath& s_path : s_loop_ptr->paths) {
-                createToolpathForSlicerpath(path_ptr, &s_path, path_z, transform, dir, s_config);
-            }
-        }
-        else {
-            RhinoApp().Print("Unhandled ExtrusionEntityType encountered at layer height: %f.\n", path_z);
-        }
-
-        this->generateWiping(path_ptr, true);
-        this->generateWiping(path_ptr, false);
-
-        if (!m_toolpaths.empty() && m_toolpaths.back()->hasToolpathPoints() && path_ptr->hasToolpathPoints()) {
-            Aion::ToolpathElement& last = m_toolpaths.back()->getToolpathPoints()->back();
-            if (last.getPoint().DistanceTo(path_ptr->getFirstPoint()->getPoint()) > slicerEPS) {
-                Aion::ToolpathTravel* travel = new Aion::ToolpathTravel(tool_config);
-                ON_3dPoint from_p = last.getPoint();
-                ON_3dVector from_v = last.getNormalIn();
-                travel->appendPoint(from_p, from_v);
-                from_v.Unitize();
-                from_p.Transform(ON_Xform::TranslationTransformation(from_v));
-                travel->appendPoint(from_p, last.getNormalIn());
-                ON_3dPoint to_p = path_ptr->getFirstPoint()->getPoint();
-                ON_3dVector to_v = path_ptr->getFirstPoint()->getNormalIn();
-                to_v.Unitize();
-                to_p.Transform(ON_Xform::TranslationTransformation(to_v));
-                travel->appendPoint(to_p, path_ptr->getFirstPoint()->getNormalIn());
-                travel->appendPoint(path_ptr->getFirstPoint()->getPoint(), path_ptr->getFirstPoint()->getNormalIn());
-
-                travel->height = last.getHeight();
-                travel->getLastPoint()->setWidth(path_ptr->getFirstPoint()->getWidth(), path_ptr->getFirstPoint()->getHeight());
-
-                travel->speed = getConfig()->machineConfig().travel_feedrate();
-                m_toolpaths.emplace_back(travel);
-            }
-        }
-        m_toolpaths.emplace_back(path_ptr);
     }
 }
