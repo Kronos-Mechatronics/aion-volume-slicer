@@ -234,6 +234,14 @@ CamSlicer::CamSlicer(const ON_UUID& plugin_uuid)
     m_gap_fill_speed->min = 0.1;
     m_gap_fill_speed->increment = 10.0;
 
+    m_first_layer_speed = new Aion::ConfigOptionPercent(50.0);
+    m_speed_factors->addOption("firstLayer", m_first_layer_speed);
+    m_first_layer_speed->label = "First layer";
+    m_first_layer_speed->tooltip = "Speed of all extrusions on the first layer in % of the print speed";
+    m_first_layer_speed->max = 1000.0;
+    m_first_layer_speed->min = 0.1;
+    m_first_layer_speed->increment = 10.0;
+
     // Filling options
     m_perimeters = new Aion::ConfigOptionInt(3);
     this->m_options.addOption("perimeters", m_perimeters);
@@ -317,22 +325,6 @@ void CamSlicer::applyConfigOptionsToSlicerConfig(Slic3r::DynamicPrintConfig& s_c
     s_config.set_deserialize_strict({
         { "layer_height", m_height->getFloat() },
         { "first_layer_height", m_first_layer_height->getFloat() },
-    });
-
-    // all speeds are absolute values relative to the print speed
-    const double speed = m_speed->getFloat() / 100.0;
-    s_config.set_deserialize_strict({
-        { "perimeter_speed", speed * m_perimeter_speed->getFloat() },
-        { "small_perimeter_speed", speed * m_small_perimeter_speed->getFloat() },
-        { "external_perimeter_speed", speed * m_external_perimeter_speed->getFloat() },
-        { "infill_speed", speed * m_infill_speed->getFloat() },
-        { "solid_infill_speed", speed * m_solid_infill_speed->getFloat() },
-        { "top_solid_infill_speed", speed * m_top_solid_infill_speed->getFloat() },
-        { "support_material_speed", speed * m_support_speed->getFloat() },
-        { "support_material_interface_speed", speed * m_support_interface_speed->getFloat() },
-        { "bridge_speed", speed * m_bridge_speed->getFloat() },
-        { "over_bridge_speed", speed * m_over_bridge_speed->getFloat() },
-        { "gap_fill_speed", speed * m_gap_fill_speed->getFloat() },
     });
 
     s_config.set_deserialize_strict({
@@ -443,83 +435,60 @@ bool _createSlicerMesh(const ON_Mesh& on_mesh, Slic3r::TriangleMesh& s_mesh, Aio
     return true;
 }
 
-// Get the speed for a given extrusion role from the Slic3r DynamicPrintConfig
-// @param s_role: Slic3r ExtrusionRole to get the speed for
-// @param is_first_layer: whether the path is on the first layer
-// @param s_config: Slic3r DynamicPrintConfig to get the speeds from
-// @return the speed for the given extrusion role
-double _getSpeedForExtrusionRole(Slic3r::ExtrusionRole& s_role, bool is_first_layer, const Slic3r::DynamicPrintConfig& s_config) {
-    double speed;
-    if (s_role == Slic3r::ExtrusionRole::Perimeter) {
-        speed = s_config.get_abs_value("perimeter_speed");
-    }
-    else if (s_role == Slic3r::ExtrusionRole::ExternalPerimeter) {
-        speed = s_config.get_abs_value("external_perimeter_speed");
-    }
-    else if (s_role.is_bridge()) {
-        assert(s_role.is_perimeter() || s_role == Slic3r::ExtrusionRole::BridgeInfill);
-        speed = s_config.get_abs_value("bridge_speed");
-    }
-    else if (s_role == Slic3r::ExtrusionRole::InternalInfill) {
-        speed = s_config.get_abs_value("infill_speed");
-    }
-    else if (s_role == Slic3r::ExtrusionRole::SolidInfill) {
-        speed = s_config.get_abs_value("solid_infill_speed");
-    }
-    else if (s_role == Slic3r::ExtrusionRole::SupportMaterial) {
-        speed = s_config.get_abs_value("support_material_speed");
-    }
-    else if (s_role == Slic3r::ExtrusionRole::SupportMaterialInterface) {
-        speed = s_config.get_abs_value("support_material_interface_speed");
-    }
-    else if (s_role == Slic3r::ExtrusionRole::Skirt) {
-        speed = s_config.get_abs_value("support_material_speed");
-    }
-    else if (s_role == Slic3r::ExtrusionRole::InfillOverBridge) {
-        const double solid_infill_speed = s_config.get_abs_value("solid_infill_speed");
-        const double over_bridge_speed{ s_config.get_abs_value("over_bridge_speed", solid_infill_speed) };
-        if (over_bridge_speed > 0) {
-            speed = over_bridge_speed;
-        }
-        else {
-            speed = solid_infill_speed;
-        }
-    }
-    else if (s_role == Slic3r::ExtrusionRole::TopSolidInfill) {
-        speed = s_config.get_abs_value("top_solid_infill_speed");
-    }
-    else if (s_role == Slic3r::ExtrusionRole::Ironing) {
-        speed = s_config.get_abs_value("ironing_speed");
-    }
-    else if (s_role == Slic3r::ExtrusionRole::GapFill) {
-        speed = s_config.get_abs_value("gap_fill_speed");
-    }
-    else {
-        throw Slic3r::InvalidArgument("Invalid speed");
-    }
+double CamSlicer::getSpeedForExtrusionRole(Slic3r::ExtrusionRole s_role, bool is_small_perimeter, bool is_first_layer) const {
+    // all speed factors are percentages of the print speed
+    const double speed = m_speed->getFloat();
+    const double factor = speed / 100.0;
+    // the first layer speed overrides all other speeds
     if (is_first_layer) {
-        const double first_layer_infill_speed{ s_config.get_abs_value("first_layer_infill_speed", speed) };
-        if (s_role == Slic3r::ExtrusionRole::SolidInfill && first_layer_infill_speed > 0) {
-            speed = first_layer_infill_speed;
-        }
-        else {
-            speed = s_config.get_abs_value("first_layer_speed", speed);
-        }
+        return factor * m_first_layer_speed->getFloat();
     }
+    if (is_small_perimeter) {
+        return factor * m_small_perimeter_speed->getFloat();
+    }
+    if (s_role == Slic3r::ExtrusionRole::Perimeter) {
+        return factor * m_perimeter_speed->getFloat();
+    }
+    if (s_role == Slic3r::ExtrusionRole::ExternalPerimeter) {
+        return factor * m_external_perimeter_speed->getFloat();
+    }
+    // bridge infill and overhang perimeters
+    if (s_role.is_bridge()) {
+        return factor * m_bridge_speed->getFloat();
+    }
+    if (s_role == Slic3r::ExtrusionRole::InternalInfill) {
+        return factor * m_infill_speed->getFloat();
+    }
+    if (s_role == Slic3r::ExtrusionRole::SolidInfill) {
+        return factor * m_solid_infill_speed->getFloat();
+    }
+    if (s_role == Slic3r::ExtrusionRole::InfillOverBridge) {
+        return factor * m_over_bridge_speed->getFloat();
+    }
+    if (s_role == Slic3r::ExtrusionRole::TopSolidInfill) {
+        return factor * m_top_solid_infill_speed->getFloat();
+    }
+    if (s_role == Slic3r::ExtrusionRole::GapFill) {
+        return factor * m_gap_fill_speed->getFloat();
+    }
+    // skirt and brim are printed with the support speed like in PrusaSlicer
+    if (s_role == Slic3r::ExtrusionRole::SupportMaterial || s_role == Slic3r::ExtrusionRole::Skirt) {
+        return factor * m_support_speed->getFloat();
+    }
+    if (s_role == Slic3r::ExtrusionRole::SupportMaterialInterface) {
+        return factor * m_support_interface_speed->getFloat();
+    }
+    // roles without an own speed (e.g. ironing) use the print speed
     return speed;
 }
 
-// Create a ToolpathPath from a Slic3r ExtrusionPath
-// @param path_ptr: pointer to the ToolpathPath to fill
-// @param s_path_ptr: pointer to the Slic3r ExtrusionPath to convert
-// @param path_z: Z height of the path
-// @param transform: transformation to apply to the points
-// @param dir: direction vector to apply to the points
-// @param s_config: Slic3r DynamicPrintConfig to get the speeds from
-void _createToolpathForSlicerpath(Aion::ToolpathPath* const path_ptr, const Slic3r::ExtrusionPath* s_path_ptr, double path_z, const ON_Xform& transform, const ON_3dVector& dir, const Slic3r::DynamicPrintConfig& s_config) {
+void CamSlicer::createToolpathForSlicerpath(Aion::ToolpathPath* const path_ptr, const Slic3r::ExtrusionPath* s_path_ptr, double path_z, const ON_Xform& transform, const ON_3dVector& dir, bool is_small_perimeter) const {
     double s_path_height = s_path_ptr->height();
     double s_path_width = s_path_ptr->width();
     double s_path_volume = s_path_ptr->mm3_per_mm();
+    // the speed is constant along the path
+    const bool is_first_layer = path_z < 0.01;
+    const double speed = getSpeedForExtrusionRole(s_path_ptr->role(), is_small_perimeter, is_first_layer);
 
     for (const Slic3r::Point& s_point : s_path_ptr->polyline) {
         ON_3dPoint on_point = ON_Point(Slic3r::unscale<double>(s_point.x()), Slic3r::unscale<double>(s_point.y()), path_z);
@@ -529,39 +498,32 @@ void _createToolpathForSlicerpath(Aion::ToolpathPath* const path_ptr, const Slic
         }
         path_ptr->getLastPoint()->setWidth(s_path_width, s_path_height);
         path_ptr->getLastPoint()->setmm3_per_mm(s_path_volume);
-        bool is_first_layer = false;
-        if (path_z < 0.01) {
-            is_first_layer = true;
-        }
-        if (s_path_ptr->role().is_perimeter() && s_path_ptr->length() <= SMALL_PERIMETER_LENGTH) {
-            path_ptr->getLastPoint()->setSpeed(s_config.get_abs_value("small_perimeter_speed", s_config.get_abs_value("perimeter_speed")));
-        }
-        else {
-            path_ptr->getLastPoint()->setSpeed(_getSpeedForExtrusionRole(s_path_ptr->role(), is_first_layer, s_config));
-        }
+        path_ptr->getLastPoint()->setSpeed(speed);
     }
 }
 
-void CamSlicer::processEntityCollection(const Slic3r::ExtrusionEntityCollection& s_collection, double path_z, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, const Slic3r::DynamicPrintConfig& s_config)
+void CamSlicer::processEntityCollection(const Slic3r::ExtrusionEntityCollection& s_collection, double path_z, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir)
 {
     //iterate the extrusion entities of the collection
     for (Slic3r::ExtrusionEntity* s_entity : s_collection) {
         Aion::ToolpathPath* const path_ptr = new Aion::ToolpathPath(tool_config);
         path_ptr->speed = m_speed->getFloat();
+        // like PrusaSlicer, the length of the whole entity (e.g. the loop) decides if it is a small perimeter
+        const bool is_small_perimeter = s_entity->role().is_perimeter() && s_entity->length() <= SMALL_PERIMETER_LENGTH;
         if (isExtrusionPath(s_entity)) {
             const Slic3r::ExtrusionPath* s_path_ptr = dynamic_cast<const Slic3r::ExtrusionPath*>(s_entity);
-            _createToolpathForSlicerpath(path_ptr, s_path_ptr, path_z, transform, dir, s_config);
+            createToolpathForSlicerpath(path_ptr, s_path_ptr, path_z, transform, dir, is_small_perimeter);
         }
         else if (isExtrusionMultiPath(s_entity)) {
             const Slic3r::ExtrusionMultiPath* s_mpath_ptr = dynamic_cast<const Slic3r::ExtrusionMultiPath*>(s_entity);
             for (const Slic3r::ExtrusionPath& s_path : s_mpath_ptr->paths) {
-                _createToolpathForSlicerpath(path_ptr, &s_path, path_z, transform, dir, s_config);
+                createToolpathForSlicerpath(path_ptr, &s_path, path_z, transform, dir, is_small_perimeter);
             }
         }
         else if (isExtrusionLoop(s_entity)) {
             const Slic3r::ExtrusionLoop* s_loop_ptr = dynamic_cast<const Slic3r::ExtrusionLoop*>(s_entity);
             for (const Slic3r::ExtrusionPath& s_path : s_loop_ptr->paths) {
-                _createToolpathForSlicerpath(path_ptr, &s_path, path_z, transform, dir, s_config);
+                createToolpathForSlicerpath(path_ptr, &s_path, path_z, transform, dir, is_small_perimeter);
             }
         }
         else {
@@ -629,6 +591,11 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
     const Aion::ToolConfig* tool_config = getConfig()->getTool(m_tool->getString());
     if (!tool_config) {
         errors.push_back(Aion::Error(Aion::ErrorClass::Critical, "Tool not found in config"));
+        return false;
+    }
+
+    if (m_speed->getFloat() <= 0.0) {
+        errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Print speed must be greater than zero."));
         return false;
     }
 
@@ -703,10 +670,10 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
 
         // Generate possible skirt and brim paths
         if (s_print.has_skirt()) {
-            processEntityCollection(s_print.skirt().flatten(), 0, tool_config, transform, dir, s_config);
+            processEntityCollection(s_print.skirt().flatten(), 0, tool_config, transform, dir);
         }
         if (s_print.has_brim()) {
-            processEntityCollection(s_print.brim().flatten(), 0, tool_config, transform, dir, s_config);
+            processEntityCollection(s_print.brim().flatten(), 0, tool_config, transform, dir);
         }
 
         //iterate over objects in print and layers in object to generate toolpaths
@@ -732,12 +699,12 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
                 // process the next layer, either support or normal, depending on which one has the lower z height
                 if (sup_z <= (*lay_it)->bottom_z()) {
                     createFlatCollectionFromLayer(*sup_it, col);
-                    processEntityCollection(col, (*sup_it)->bottom_z(), tool_config, transform, dir, s_config);
+                    processEntityCollection(col, (*sup_it)->bottom_z(), tool_config, transform, dir);
                     ++sup_it;
                 }
                 else {
                     createFlatCollectionFromLayer(*lay_it, col);
-                    processEntityCollection(col, (*lay_it)->bottom_z(), tool_config, transform, dir, s_config);
+                    processEntityCollection(col, (*lay_it)->bottom_z(), tool_config, transform, dir);
                     ++lay_it;
                 }
             }

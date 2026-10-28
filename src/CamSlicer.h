@@ -50,12 +50,28 @@ private:
     // @param errors: reference to error list to append errors/warnings/info messages
     // @return true if the slicer config was built successfully, false otherwise
 	bool loadSlicerConfig(Slic3r::DynamicPrintConfig& s_config, Aion::Errorlist& errors);
+	// Get the speed of an extrusion role from the print speed and the speed factors of this cam block.
+	// The slicer only computes speeds during its gcode export, which is not used, so the speeds are not taken from the slicer config.
+	// @param s_role: Slic3r ExtrusionRole to get the speed for
+	// @param is_small_perimeter: whether the path belongs to a perimeter not longer than SMALL_PERIMETER_LENGTH
+	// @param is_first_layer: whether the path is on the first layer, the first layer speed overrides all other speeds
+	// @return the speed for the given extrusion role in mm/s
+	double getSpeedForExtrusionRole(Slic3r::ExtrusionRole s_role, bool is_small_perimeter, bool is_first_layer) const;
+
+	// Append the points of a Slic3r ExtrusionPath to a ToolpathPath
+	// @param path_ptr: pointer to the ToolpathPath to fill
+	// @param s_path_ptr: pointer to the Slic3r ExtrusionPath to convert
+	// @param path_z: Z height of the path
+	// @param transform: transformation to apply to the points
+	// @param dir: direction vector to apply to the points
+	// @param is_small_perimeter: whether the path belongs to a perimeter not longer than SMALL_PERIMETER_LENGTH
+	void createToolpathForSlicerpath(Aion::ToolpathPath* const path_ptr, const Slic3r::ExtrusionPath* s_path_ptr, double path_z, const ON_Xform& transform, const ON_3dVector& dir, bool is_small_perimeter) const;
 
 	// convert each extrusion entity (path, multipath or loop) of a flat collection into one ToolpathPath with wiping at start and end.
 	// path_z is the layer height in slicer coordinates, transform maps slicer coordinates back into the Rhino scene.
 	// if a path does not start where the previous toolpath ended, a ToolpathTravel is inserted that lifts 1 mm along
 	// the tool direction, moves above the start of the next path and approaches it. The results are appended to m_toolpaths.
-	void processEntityCollection(const Slic3r::ExtrusionEntityCollection& s_collection, double path_z, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, const Slic3r::DynamicPrintConfig& s_config);
+	void processEntityCollection(const Slic3r::ExtrusionEntityCollection& s_collection, double path_z, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir);
 
 	// collect all extrusion entities of a layer into one flat collection (no nested collections).
 	// support layers contribute their support fills, object layers the perimeters followed by the fills of each region.
@@ -90,6 +106,7 @@ private:
 	Aion::ConfigOptionPercent* m_bridge_speed;
 	Aion::ConfigOptionPercent* m_over_bridge_speed;
 	Aion::ConfigOptionPercent* m_gap_fill_speed;
+	Aion::ConfigOptionPercent* m_first_layer_speed;
 
 	// Filling options
 	Aion::ConfigOptionInt* m_perimeters;
