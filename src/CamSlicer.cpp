@@ -552,28 +552,53 @@ void _appendSupportLayerExtrusions(const Slic3r::SupportLayer& s_layer, Slic3r::
 
 // Append all extrusions of a layer sorted by print island (connected area)
 // @param s_layer: object layer to append the extrusions from
+// @param infill_first: print the fills of an island before its perimeters
 // @param last_pos[in, out]: last print position in slicer coordinates, updated to the end of the appended extrusions
 // @param s_entities[out]: vector the references are appended to
-void _appendObjectLayerExtrusionsSortedByIsland(const Slic3r::Layer& s_layer, Slic3r::Point& last_pos, Slic3r::ExtrusionEntityReferences& s_entities) {
+void _appendObjectLayerExtrusionsSortedByIsland(const Slic3r::Layer& s_layer, bool infill_first, Slic3r::Point& last_pos, Slic3r::ExtrusionEntityReferences& s_entities) {
     for (size_t slice_idx : s_layer.lslice_indices_sorted_by_print_order) {
         const Slic3r::LayerSlice& s_slice = s_layer.lslices_ex[slice_idx];
         std::vector<std::reference_wrapper<const Slic3r::LayerIsland>> s_islands(s_slice.islands.begin(), s_slice.islands.end());
         Slic3r::chain_and_reorder_layer_islands(s_islands, &last_pos);
 
         for (const Slic3r::LayerIsland& s_island : s_islands) {
+            const size_t island_begin = s_entities.size();
             // the perimeters of an island are already ordered by the perimeter generator
             const Slic3r::LayerRegion* s_perimeter_region = s_layer.get_region(s_island.perimeters.region());
             for (uint32_t perimeter_id : s_island.perimeters) {
                 _appendExtrusionEntities(*s_perimeter_region->perimeters().entities[perimeter_id], false, s_entities);
             }
+            const size_t fills_begin = s_entities.size();
             // the fills (including the thin walls of the classic perimeter generator) can belong to several regions
             for (const Slic3r::LayerExtrusionRange& s_fill_range : s_island.fills) {
                 const Slic3r::LayerRegion* s_fill_region = s_layer.get_region(s_fill_range.region());
                 for (uint32_t fill_id : s_fill_range) {
-                    _appendExtrusionEntities(*s_fill_region->fills().entities[fill_id], false, s_entities);
+                    const Slic3r::ExtrusionEntity* s_fill = s_fill_region->fills().entities[fill_id];
+                    if (s_fill->role() != Slic3r::ExtrusionRole::Ironing) {
+                        _appendExtrusionEntities(*s_fill, false, s_entities);
+                    }
                 }
             }
+            // move the fills in front of the perimeters
+            if (infill_first) {
+                std::rotate(s_entities.begin() + island_begin, s_entities.begin() + fills_begin, s_entities.end());
+            }
             // the next islands are chained from the end of this one
+            _updateLastPosition(s_entities, last_pos);
+        }
+
+        // ironing of all islands of the slice, the islands are chained again from the current position like in PrusaSlicer
+        Slic3r::chain_and_reorder_layer_islands(s_islands, &last_pos);
+        for (const Slic3r::LayerIsland& s_island : s_islands) {
+            for (const Slic3r::LayerExtrusionRange& s_fill_range : s_island.fills) {
+                const Slic3r::LayerRegion* s_fill_region = s_layer.get_region(s_fill_range.region());
+                for (uint32_t fill_id : s_fill_range) {
+                    const Slic3r::ExtrusionEntity* s_fill = s_fill_region->fills().entities[fill_id];
+                    if (s_fill->role() == Slic3r::ExtrusionRole::Ironing) {
+                        _appendExtrusionEntities(*s_fill, false, s_entities);
+                    }
+                }
+            }
             _updateLastPosition(s_entities, last_pos);
         }
     }
@@ -792,6 +817,8 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
     Slic3r::ExtrusionEntityReferences s_entities;
     // end point of the last extrusion in slicer coordinates, the following extrusions are ordered starting there
     Slic3r::Point last_pos = Slic3r::Point::Zero();
+    // print the fills of an island before its perimeters
+    const bool infill_first = s_print.config().infill_first.value;
 
     // Generate possible skirt and brim paths, both are printed in their stored order like in PrusaSlicer
     if (s_print.has_skirt()) {
@@ -837,7 +864,7 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
                 ++sup_it;
             }
             else {
-                _appendObjectLayerExtrusionsSortedByIsland(**lay_it, last_pos, s_entities);
+                _appendObjectLayerExtrusionsSortedByIsland(**lay_it, infill_first, last_pos, s_entities);
                 if (!processEntityCollection(s_entities, (*lay_it)->bottom_z(), (*lay_it)->bottom_z() < slicerEPS, tool_config, to_scene, dir, errors)) {
                     m_toolpaths.clear();
                     return false;
