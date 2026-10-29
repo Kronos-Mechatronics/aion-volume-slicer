@@ -75,7 +75,8 @@ private:
     // @param tool_config: pointer to the tool config to use for the extrusion
     // @param transform: transformation to apply to the points
     // @param dir: direction vector to apply to the points
-	void processEntityCollection(const Slic3r::ExtrusionEntityCollection& s_collection, double path_z, bool is_first_layer, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir);
+    // @param errors[out]: warnings and errors encountered during conversion
+	void processEntityCollection(const Slic3r::ExtrusionEntityCollection& s_collection, double path_z, bool is_first_layer, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, Aion::Errorlist& errors);
 
 	// collect all extrusion entities of a layer into one flat collection (no nested collections). 
     // @param s_layer: pointer to the Slic3r Layer to convert

@@ -3,6 +3,7 @@
 #include "CamSlicer.h"
 #include "InteractiveSelection.h"
 #include "Geometry5X.h"
+#include <format.hpp>
 
 // Baseline PrusaSlicer config, shipped next to the plugin .rhp
 static const wchar_t* BASELINE_CONFIG_FILENAME = L"Aion_prusa_config.ini";
@@ -506,41 +507,64 @@ void CamSlicer::createToolpathForSlicerpath(Aion::ToolpathPath* const path_ptr, 
     }
 }
 
-void CamSlicer::processEntityCollection(const Slic3r::ExtrusionEntityCollection& s_collection, double path_z, bool is_first_layer, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir)
+void CamSlicer::processEntityCollection(const Slic3r::ExtrusionEntityCollection& s_collection, double path_z, bool is_first_layer, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, Aion::Errorlist& errors)
 {
     //iterate the extrusion entities of the collection
     for (Slic3r::ExtrusionEntity* s_entity : s_collection) {
-        Aion::ToolpathPath* const path_ptr = new Aion::ToolpathPath(tool_config);
+        auto path = std::make_unique<Aion::ToolpathPath>(tool_config);
+        Aion::ToolpathPath* const path_ptr = path.get();
         path_ptr->speed = m_speed->getFloat();
         // like PrusaSlicer, the length of the whole entity (e.g. the loop) decides if it is a small perimeter
         const bool is_small_perimeter = s_entity->role().is_perimeter() && s_entity->length() <= SMALL_PERIMETER_LENGTH;
+        // Handle ExtrusionPath objects
         if (isExtrusionPath(s_entity)) {
             const Slic3r::ExtrusionPath* s_path_ptr = dynamic_cast<const Slic3r::ExtrusionPath*>(s_entity);
+            path_ptr->getToolpathPoints()->reserve(s_path_ptr->polyline.size());
             createToolpathForSlicerpath(path_ptr, s_path_ptr, path_z, transform, dir, is_small_perimeter, is_first_layer);
         }
+        // Handle MultiPath objects
         else if (isExtrusionMultiPath(s_entity)) {
             const Slic3r::ExtrusionMultiPath* s_mpath_ptr = dynamic_cast<const Slic3r::ExtrusionMultiPath*>(s_entity);
+            size_t point_count = 0;
+            for (const Slic3r::ExtrusionPath& s_path : s_mpath_ptr->paths) {
+                point_count += s_path.polyline.size();
+            }
+            path_ptr->getToolpathPoints()->reserve(point_count);
             for (const Slic3r::ExtrusionPath& s_path : s_mpath_ptr->paths) {
                 createToolpathForSlicerpath(path_ptr, &s_path, path_z, transform, dir, is_small_perimeter, is_first_layer);
             }
         }
+        // Handle ExtrusionLoop objects
         else if (isExtrusionLoop(s_entity)) {
             const Slic3r::ExtrusionLoop* s_loop_ptr = dynamic_cast<const Slic3r::ExtrusionLoop*>(s_entity);
+            size_t point_count = 0;
+            for (const Slic3r::ExtrusionPath& s_path : s_loop_ptr->paths) {
+                point_count += s_path.polyline.size();
+            }
+            path_ptr->getToolpathPoints()->reserve(point_count);
             for (const Slic3r::ExtrusionPath& s_path : s_loop_ptr->paths) {
                 createToolpathForSlicerpath(path_ptr, &s_path, path_z, transform, dir, is_small_perimeter, is_first_layer);
             }
         }
+        // Handle unknown extrusion types and stop processing this entity
         else {
-            RhinoApp().Print("Unhandled ExtrusionEntityType encountered at layer height: %f.\n", path_z);
+            errors.push_back(Aion::Error(Aion::ErrorClass::Warning, Slic3r::format("Unsupported extrusion type found at slicing height %.3f mm.", path_z)));
+            return;
+        }
+        // skip empty and zero length extrusions
+        if (path_ptr->getToolpathPoints()->size() < 2) {
+            continue;
         }
 
+        // generate wiping moves before and after the extrusion path
         this->generateWiping(path_ptr, true);
         this->generateWiping(path_ptr, false);
 
+        // generate travel moves between the last point of the previous path and the first point of this path
         if (!m_toolpaths.empty() && m_toolpaths.back()->hasToolpathPoints() && path_ptr->hasToolpathPoints()) {
             Aion::ToolpathElement& last = m_toolpaths.back()->getToolpathPoints()->back();
             if (last.getPoint().DistanceTo(path_ptr->getFirstPoint()->getPoint()) > slicerEPS) {
-                Aion::ToolpathTravel* travel = new Aion::ToolpathTravel(tool_config);
+                auto travel = std::make_unique<Aion::ToolpathTravel>(tool_config);
                 ON_3dPoint from_p = last.getPoint();
                 ON_3dVector from_v = last.getNormalIn();
                 travel->appendPoint(from_p, from_v);
@@ -558,10 +582,10 @@ void CamSlicer::processEntityCollection(const Slic3r::ExtrusionEntityCollection&
                 travel->getLastPoint()->setWidth(path_ptr->getFirstPoint()->getWidth(), path_ptr->getFirstPoint()->getHeight());
 
                 travel->speed = getConfig()->machineConfig().travel_feedrate();
-                m_toolpaths.emplace_back(travel);
+                m_toolpaths.emplace_back(std::move(travel));
             }
         }
-        m_toolpaths.emplace_back(path_ptr);
+        m_toolpaths.emplace_back(std::move(path));
     }
 }
 
@@ -674,10 +698,10 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
 
         // Generate possible skirt and brim paths
         if (s_print.has_skirt()) {
-            processEntityCollection(s_print.skirt().flatten(), 0, true, tool_config, transform, dir);
+            processEntityCollection(s_print.skirt().flatten(), 0, true, tool_config, transform, dir, errors);
         }
         if (s_print.has_brim()) {
-            processEntityCollection(s_print.brim().flatten(), 0, true, tool_config, transform, dir);
+            processEntityCollection(s_print.brim().flatten(), 0, true, tool_config, transform, dir, errors);
         }
 
         //iterate over objects in print and layers in object to generate toolpaths
@@ -703,12 +727,12 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
                 // process the next layer, either support or normal, depending on which one has the lower z height
                 if (sup_z <= (*lay_it)->bottom_z()) {
                     createFlatCollectionFromLayer(*sup_it, col);
-                    processEntityCollection(col, (*sup_it)->bottom_z(), tool_config, transform, dir);
+                    processEntityCollection(col, (*sup_it)->bottom_z(), (*sup_it)->bottom_z() < slicerEPS, tool_config, transform, dir, errors);
                     ++sup_it;
                 }
                 else {
                     createFlatCollectionFromLayer(*lay_it, col);
-                    processEntityCollection(col, (*lay_it)->bottom_z(), tool_config, transform, dir);
+                    processEntityCollection(col, (*lay_it)->bottom_z(), (*lay_it)->bottom_z() < slicerEPS, tool_config, transform, dir, errors);
                     ++lay_it;
                 }
             }
