@@ -323,9 +323,11 @@ void CamSlicer::applyConfigOptionsToSlicerConfig(Slic3r::DynamicPrintConfig& s_c
         s_config.set_deserialize_strict({ { key, width } });
     }
     
+    // Aion has no nozzle, PrusaSlicer uses the nozzle diameter as bead size (e.g. for Arachne and overhang thresholds) we set the nozzle diameter to the extrusion width
     s_config.set_deserialize_strict({
         { "layer_height", m_height->getFloat() },
         { "first_layer_height", m_first_layer_height->getFloat() },
+        { "nozzle_diameter", width },
     });
 
     s_config.set_deserialize_strict({
