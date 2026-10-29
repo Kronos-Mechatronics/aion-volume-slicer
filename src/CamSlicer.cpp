@@ -507,10 +507,25 @@ void CamSlicer::createToolpathForSlicerpath(Aion::ToolpathPath* const path_ptr, 
     }
 }
 
-void CamSlicer::processEntityCollection(const Slic3r::ExtrusionEntityCollection& s_collection, double path_z, bool is_first_layer, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, Aion::Errorlist& errors)
+// Collect pointers to all extrusion entities of a collection and its nested collections in their stored order
+// @param s_collection: collection to collect the entities from
+// @param s_entities[out]: vector the entities are appended to
+void _collectExtrusionEntities(const Slic3r::ExtrusionEntityCollection& s_collection, std::vector<const Slic3r::ExtrusionEntity*>& s_entities) {
+    for (const Slic3r::ExtrusionEntity* s_entity : s_collection.entities) {
+        if (s_entity->is_collection()) {
+            // recursively collect the entities of the nested collection
+            _collectExtrusionEntities(*static_cast<const Slic3r::ExtrusionEntityCollection*>(s_entity), s_entities);
+        }
+        else {
+            s_entities.push_back(s_entity);
+        }
+    }
+}
+
+void CamSlicer::processEntityCollection(const std::vector<const Slic3r::ExtrusionEntity*>& s_entities, double path_z, bool is_first_layer, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, Aion::Errorlist& errors)
 {
-    //iterate the extrusion entities of the collection
-    for (Slic3r::ExtrusionEntity* s_entity : s_collection) {
+    //iterate the extrusion entities
+    for (const Slic3r::ExtrusionEntity* s_entity : s_entities) {
         auto path = std::make_unique<Aion::ToolpathPath>(tool_config);
         Aion::ToolpathPath* const path_ptr = path.get();
         path_ptr->speed = m_speed->getFloat();
@@ -586,22 +601,6 @@ void CamSlicer::processEntityCollection(const Slic3r::ExtrusionEntityCollection&
             }
         }
         m_toolpaths.emplace_back(std::move(path));
-    }
-}
-
-void CamSlicer::createFlatCollectionFromLayer(const Slic3r::Layer* s_layer, Slic3r::ExtrusionEntityCollection& collection)
-{
-    const Slic3r::SupportLayer* sup_layer = dynamic_cast<const Slic3r::SupportLayer*>(s_layer);
-    if (sup_layer) {
-        collection = sup_layer->support_fills.flatten();
-    }
-    else {
-        Slic3r::ExtrusionEntityCollection tmp;
-        for (Slic3r::LayerRegion* region : s_layer->regions()) {
-            tmp.append(region->perimeters().flatten());
-            tmp.append(region->fills().flatten());
-        }
-        collection = tmp.flatten();
     }
 }
 
@@ -696,43 +695,43 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
         s_print.apply(s_model, s_config);
         s_print.process();
 
+        // vector for the flattened extrusion entities of the print (reused after clearing)
+        std::vector<const Slic3r::ExtrusionEntity*> s_entities;
+
         // Generate possible skirt and brim paths
         if (s_print.has_skirt()) {
-            processEntityCollection(s_print.skirt().flatten(), 0, true, tool_config, transform, dir, errors);
+            _collectExtrusionEntities(s_print.skirt(), s_entities);
+            processEntityCollection(s_entities, 0, true, tool_config, transform, dir, errors);
         }
         if (s_print.has_brim()) {
-            processEntityCollection(s_print.brim().flatten(), 0, true, tool_config, transform, dir, errors);
+            s_entities.clear();
+            _collectExtrusionEntities(s_print.brim(), s_entities);
+            processEntityCollection(s_entities, 0, true, tool_config, transform, dir, errors);
         }
 
         //iterate over objects in print and layers in object to generate toolpaths
         for (const Slic3r::PrintObject* s_po : s_print.objects()) {
             const Slic3r::SupportLayer* const* sup_it = s_po->support_layers().begin();
             const Slic3r::SupportLayer* const* sup_end = s_po->support_layers().end();
-            double sup_z = INT_MAX;
-            if (!sup_it) {
-                sup_it = nullptr;
-                sup_end = nullptr;
-            }
             const Slic3r::Layer* const* lay_it = s_po->layers().begin();
             const Slic3r::Layer* const* lay_end = s_po->layers().end();
             while (sup_it != sup_end || lay_it != lay_end) {
-                // set the z height of the next support layer, if there is one, otherwise set it to INT_MAX
-                if (sup_it && sup_it != sup_end) {
-                    sup_z = (*sup_it)->bottom_z();
-                }
-                else {
-                    sup_z = INT_MAX;
-                }
-                Slic3r::ExtrusionEntityCollection col;
-                // process the next layer, either support or normal, depending on which one has the lower z height
-                if (sup_z <= (*lay_it)->bottom_z()) {
-                    createFlatCollectionFromLayer(*sup_it, col);
-                    processEntityCollection(col, (*sup_it)->bottom_z(), (*sup_it)->bottom_z() < slicerEPS, tool_config, transform, dir, errors);
+                s_entities.clear();
+                // process the next layer, either support or object, depending on which one has the lower z height.
+                // every support or object layer that lies on the build plate (bottom_z = 0) is a first layer
+                const bool next_is_support = sup_it != sup_end && (lay_it == lay_end || (*sup_it)->bottom_z() <= (*lay_it)->bottom_z());
+                if (next_is_support) {
+                    _collectExtrusionEntities((*sup_it)->support_fills, s_entities);
+                    processEntityCollection(s_entities, (*sup_it)->bottom_z(), (*sup_it)->bottom_z() < slicerEPS, tool_config, transform, dir, errors);
                     ++sup_it;
                 }
                 else {
-                    createFlatCollectionFromLayer(*lay_it, col);
-                    processEntityCollection(col, (*lay_it)->bottom_z(), (*lay_it)->bottom_z() < slicerEPS, tool_config, transform, dir, errors);
+                    // perimeters before fills for each region, the thin walls are part of the fills
+                    for (const Slic3r::LayerRegion* region : (*lay_it)->regions()) {
+                        _collectExtrusionEntities(region->perimeters(), s_entities);
+                        _collectExtrusionEntities(region->fills(), s_entities);
+                }
+                    processEntityCollection(s_entities, (*lay_it)->bottom_z(), (*lay_it)->bottom_z() < slicerEPS, tool_config, transform, dir, errors);
                     ++lay_it;
                 }
             }
