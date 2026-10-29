@@ -574,7 +574,7 @@ void CamSlicer::processEntityCollection(const std::vector<const Slic3r::Extrusio
         // generate wiping moves before and after the extrusion path
         this->generateWiping(path_ptr, true);
         this->generateWiping(path_ptr, false);
-
+        
         // generate travel moves between the last point of the previous path and the first point of this path
         if (!m_toolpaths.empty() && m_toolpaths.back()->hasToolpathPoints() && path_ptr->hasToolpathPoints()) {
             Aion::ToolpathElement& last = m_toolpaths.back()->getToolpathPoints()->back();
@@ -669,77 +669,88 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
     ON_Xform transform = ON_Xform::TranslationTransformation(ON_3dPoint::Origin - point) * rot_xform;
     transform.Invert();
 
-    try {
-        // Create a Slic3r model and print
-        Slic3r::Model s_model;
-        Slic3r::Print s_print;
-        Slic3r::ModelObject* s_mo_ptr = s_model.add_object();
-        s_mo_ptr->add_instance();
-        // Get create the slicer config from the initial config and the options of this cam block
-        Slic3r::DynamicPrintConfig s_config;
-        if (!loadSlicerConfig(s_config, errors)) {
+    // Create a Slic3r model and print
+    Slic3r::Model s_model;
+    Slic3r::Print s_print;
+    Slic3r::ModelObject* s_mo_ptr = s_model.add_object();
+    s_mo_ptr->add_instance();
+    // Get create the slicer config from the initial config and the options of this cam block
+    Slic3r::DynamicPrintConfig s_config;
+    if (!loadSlicerConfig(s_config, errors)) {
+        return false;
+    }
+    // reject invalid values, e.g. from the user configuration options
+    if (const std::string config_error = s_config.validate(); !config_error.empty()) {
+        errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Invalid slicer configuration: " + config_error));
+        return false;
+    }
+
+    // Create slicer Meshes from the ON_Meshes and add them to the Slic3r model
+    for (std::unique_ptr<ON_Mesh>& on_mesh_ptr : on_meshes) {
+        on_mesh_ptr->Translate(ON_3dPoint::Origin - point);
+        Slic3r::TriangleMesh s_mesh;
+        if (!_createSlicerMesh(*on_mesh_ptr, s_mesh, errors)) {
             return false;
         }
-        
-        // Create slicer Meshes from the ON_Meshes and add them to the Slic3r model
-        for (std::unique_ptr<ON_Mesh>& on_mesh_ptr : on_meshes) {
-            on_mesh_ptr->Translate(ON_3dPoint::Origin - point);
-            Slic3r::TriangleMesh s_mesh;
-            if (!_createSlicerMesh(*on_mesh_ptr, s_mesh, errors)) {
-                return false;
-            }
-            s_mo_ptr->add_volume(std::move(s_mesh));
-        }
+        s_mo_ptr->add_volume(std::move(s_mesh));
+    }
 
-        // Process the Slic3r model to generate the toolpaths
-        s_print.apply(s_model, s_config);
+    // Set the print model and config
+    s_print.apply(s_model, s_config);
+    // Validate the print config before slicing
+    if (const std::string print_error = s_print.validate(); !print_error.empty()) {
+        errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Slicing not possible: " + print_error));
+        return false;
+    }
+    // slice the print
+    try {
         s_print.process();
-
-        // vector for the flattened extrusion entities of the print (reused after clearing)
-        std::vector<const Slic3r::ExtrusionEntity*> s_entities;
-
-        // Generate possible skirt and brim paths
-        if (s_print.has_skirt()) {
-            _collectExtrusionEntities(s_print.skirt(), s_entities);
-            processEntityCollection(s_entities, 0, true, tool_config, transform, dir, errors);
-        }
-        if (s_print.has_brim()) {
-            s_entities.clear();
-            _collectExtrusionEntities(s_print.brim(), s_entities);
-            processEntityCollection(s_entities, 0, true, tool_config, transform, dir, errors);
-        }
-
-        //iterate over objects in print and layers in object to generate toolpaths
-        for (const Slic3r::PrintObject* s_po : s_print.objects()) {
-            const Slic3r::SupportLayer* const* sup_it = s_po->support_layers().begin();
-            const Slic3r::SupportLayer* const* sup_end = s_po->support_layers().end();
-            const Slic3r::Layer* const* lay_it = s_po->layers().begin();
-            const Slic3r::Layer* const* lay_end = s_po->layers().end();
-            while (sup_it != sup_end || lay_it != lay_end) {
-                s_entities.clear();
-                // process the next layer, either support or object, depending on which one has the lower z height.
-                // every support or object layer that lies on the build plate (bottom_z = 0) is a first layer
-                const bool next_is_support = sup_it != sup_end && (lay_it == lay_end || (*sup_it)->bottom_z() <= (*lay_it)->bottom_z());
-                if (next_is_support) {
-                    _collectExtrusionEntities((*sup_it)->support_fills, s_entities);
-                    processEntityCollection(s_entities, (*sup_it)->bottom_z(), (*sup_it)->bottom_z() < slicerEPS, tool_config, transform, dir, errors);
-                    ++sup_it;
-                }
-                else {
-                    // perimeters before fills for each region, the thin walls are part of the fills
-                    for (const Slic3r::LayerRegion* region : (*lay_it)->regions()) {
-                        _collectExtrusionEntities(region->perimeters(), s_entities);
-                        _collectExtrusionEntities(region->fills(), s_entities);
-                }
-                    processEntityCollection(s_entities, (*lay_it)->bottom_z(), (*lay_it)->bottom_z() < slicerEPS, tool_config, transform, dir, errors);
-                    ++lay_it;
-                }
-            }
-        }
-
     }
     catch (const std::exception& exc) {
-        RhinoApp().Print(exc.what());
+        errors.push_back(Aion::Error(Aion::ErrorClass::Critical, std::string("Slicing failed: ") + exc.what()));
+        return false;
+    }
+
+    // vector for the flattened extrusion entities of the print (reused after clearing)
+    std::vector<const Slic3r::ExtrusionEntity*> s_entities;
+
+    // Generate possible skirt and brim paths
+    if (s_print.has_skirt()) {
+        _collectExtrusionEntities(s_print.skirt(), s_entities);
+        processEntityCollection(s_entities, 0, true, tool_config, transform, dir, errors);
+    }
+    if (s_print.has_brim()) {
+        s_entities.clear();
+        _collectExtrusionEntities(s_print.brim(), s_entities);
+        processEntityCollection(s_entities, 0, true, tool_config, transform, dir, errors);
+    }
+
+    //iterate over objects in print and layers in object to generate toolpaths
+    for (const Slic3r::PrintObject* s_po : s_print.objects()) {
+        const Slic3r::SupportLayer* const* sup_it = s_po->support_layers().begin();
+        const Slic3r::SupportLayer* const* sup_end = s_po->support_layers().end();
+        const Slic3r::Layer* const* lay_it = s_po->layers().begin();
+        const Slic3r::Layer* const* lay_end = s_po->layers().end();
+        while (sup_it != sup_end || lay_it != lay_end) {
+            s_entities.clear();
+            // process the next layer, either support or object, depending on which one has the lower z height.
+            // every support or object layer that lies on the build plate (bottom_z = 0) is a first layer
+            const bool next_is_support = sup_it != sup_end && (lay_it == lay_end || (*sup_it)->bottom_z() <= (*lay_it)->bottom_z());
+            if (next_is_support) {
+                _collectExtrusionEntities((*sup_it)->support_fills, s_entities);
+                processEntityCollection(s_entities, (*sup_it)->bottom_z(), (*sup_it)->bottom_z() < slicerEPS, tool_config, transform, dir, errors);
+                ++sup_it;
+            }
+            else {
+                // perimeters before fills for each region, the thin walls are part of the fills
+                for (const Slic3r::LayerRegion* region : (*lay_it)->regions()) {
+                    _collectExtrusionEntities(region->perimeters(), s_entities);
+                    _collectExtrusionEntities(region->fills(), s_entities);
+                }
+                processEntityCollection(s_entities, (*lay_it)->bottom_z(), (*lay_it)->bottom_z() < slicerEPS, tool_config, transform, dir, errors);
+                ++lay_it;
+            }
+        }
     }
 
     return true;
