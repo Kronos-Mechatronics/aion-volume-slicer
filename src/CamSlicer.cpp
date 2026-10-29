@@ -710,9 +710,19 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
         errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Slicing not possible: " + print_error));
         return false;
     }
+    // set the callback to check for user abort during slicing
+    s_print.set_status_callback([this, &s_print](const Slic3r::PrintBase::SlicingStatus&) {
+        if (isPlanningAborted()) {
+            s_print.cancel();
+        }
+    });
     // slice the print
     try {
         s_print.process();
+    }
+    catch (const Slic3r::CanceledException&) {
+        errors.push_back(Aion::Error(Aion::ErrorClass::Critical, "Pathplanning aborted by user."));
+        return false;
     }
     catch (const std::exception& exc) {
         errors.push_back(Aion::Error(Aion::ErrorClass::Critical, std::string("Slicing failed: ") + exc.what()));
@@ -746,6 +756,11 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
         const Slic3r::Layer* const* lay_it = s_po->layers().begin();
         const Slic3r::Layer* const* lay_end = s_po->layers().end();
         while (sup_it != sup_end || lay_it != lay_end) {
+            if (isPlanningAborted()) {
+                errors.push_back(Aion::Error(Aion::ErrorClass::Critical, "Pathplanning aborted by user."));
+                m_toolpaths.clear();
+                return false;
+            }
             s_entities.clear();
             // process the next layer, either support or object, depending on which one has the lower z height.
             // every support or object layer that lies on the build plate (bottom_z = 0) is a first layer
