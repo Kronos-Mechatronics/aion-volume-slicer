@@ -526,7 +526,7 @@ void _collectExtrusionEntities(const Slic3r::ExtrusionEntityCollection& s_collec
     }
 }
 
-void CamSlicer::processEntityCollection(const std::vector<const Slic3r::ExtrusionEntity*>& s_entities, double path_z, bool is_first_layer, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, Aion::Errorlist& errors)
+bool CamSlicer::processEntityCollection(const std::vector<const Slic3r::ExtrusionEntity*>& s_entities, double path_z, bool is_first_layer, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, Aion::Errorlist& errors)
 {
     //iterate the extrusion entities
     for (const Slic3r::ExtrusionEntity* s_entity : s_entities) {
@@ -568,7 +568,7 @@ void CamSlicer::processEntityCollection(const std::vector<const Slic3r::Extrusio
         // Handle unknown extrusion types and stop processing this entity
         else {
             errors.push_back(Aion::Error(Aion::ErrorClass::Warning, Slic3r::format("Unsupported extrusion type found at slicing height %.3f mm.", path_z)));
-            return;
+            return false;
         }
         // skip empty and zero length extrusions
         if (path_ptr->getToolpathPoints()->size() < 2) {
@@ -606,6 +606,7 @@ void CamSlicer::processEntityCollection(const std::vector<const Slic3r::Extrusio
         }
         m_toolpaths.emplace_back(std::move(path));
     }
+    return true;
 }
 
 bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
@@ -724,12 +725,18 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
     // Generate possible skirt and brim paths
     if (s_print.has_skirt()) {
         _collectExtrusionEntities(s_print.skirt(), s_entities);
-        processEntityCollection(s_entities, 0, true, tool_config, to_scene, dir, errors);
+        if (!processEntityCollection(s_entities, 0, true, tool_config, to_scene, dir, errors)) {
+            m_toolpaths.clear();
+            return false;
+        }
     }
     if (s_print.has_brim()) {
         s_entities.clear();
         _collectExtrusionEntities(s_print.brim(), s_entities);
-        processEntityCollection(s_entities, 0, true, tool_config, to_scene, dir, errors);
+        if (!processEntityCollection(s_entities, 0, true, tool_config, to_scene, dir, errors)) {
+            m_toolpaths.clear();
+            return false;
+        }
     }
 
     //iterate over objects in print and layers in object to generate toolpaths
@@ -745,7 +752,10 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
             const bool next_is_support = sup_it != sup_end && (lay_it == lay_end || (*sup_it)->bottom_z() <= (*lay_it)->bottom_z());
             if (next_is_support) {
                 _collectExtrusionEntities((*sup_it)->support_fills, s_entities);
-                processEntityCollection(s_entities, (*sup_it)->bottom_z(), (*sup_it)->bottom_z() < slicerEPS, tool_config, to_scene, dir, errors);
+                if (!processEntityCollection(s_entities, (*sup_it)->bottom_z(), (*sup_it)->bottom_z() < slicerEPS, tool_config, to_scene, dir, errors)) {
+                    m_toolpaths.clear();
+                    return false;
+                }
                 ++sup_it;
             }
             else {
@@ -754,7 +764,10 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
                     _collectExtrusionEntities(region->perimeters(), s_entities);
                     _collectExtrusionEntities(region->fills(), s_entities);
                 }
-                processEntityCollection(s_entities, (*lay_it)->bottom_z(), (*lay_it)->bottom_z() < slicerEPS, tool_config, to_scene, dir, errors);
+                if (!processEntityCollection(s_entities, (*lay_it)->bottom_z(), (*lay_it)->bottom_z() < slicerEPS, tool_config, to_scene, dir, errors)) {
+                    m_toolpaths.clear();
+                    return false;
+                }
                 ++lay_it;
             }
         }

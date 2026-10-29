@@ -76,7 +76,8 @@ private:
     // @param transform: transformation to apply to the points
     // @param dir: direction vector to apply to the points
     // @param errors[out]: warnings and errors encountered during conversion
-	void processEntityCollection(const std::vector<const Slic3r::ExtrusionEntity*>& s_entities, double path_z, bool is_first_layer, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, Aion::Errorlist& errors);
+    // @return false if an entity has an unsupported type, a warning is added then and slicing should stop
+	bool processEntityCollection(const std::vector<const Slic3r::ExtrusionEntity*>& s_entities, double path_z, bool is_first_layer, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, Aion::Errorlist& errors);
 
 private:
 	// Components of the volume structure object in the Rhino scene
