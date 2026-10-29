@@ -645,7 +645,7 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
     }
 
     // check height must be lower than the width, otherwise the slicer will fail
-    if (m_height->getFloat() >= m_width->getFloat()) {
+    if (m_height->getFloat() >= m_width->getFloat() || m_first_layer_height->getFloat() >= m_width->getFloat()) {
         errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Slicing not possible: Layer height must be lower than the extrusion width."));
         return false;
     }
