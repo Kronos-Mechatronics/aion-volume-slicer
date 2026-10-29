@@ -487,14 +487,16 @@ double CamSlicer::getSpeedForExtrusionRole(Slic3r::ExtrusionRole s_role, bool is
     return speed;
 }
 
-void CamSlicer::createToolpathForSlicerpath(Aion::ToolpathPath* const path_ptr, const Slic3r::ExtrusionPath* s_path_ptr, double path_z, const ON_Xform& transform, const ON_3dVector& dir, bool is_small_perimeter, bool is_first_layer) const {
+void CamSlicer::createToolpathForSlicerpath(Aion::ToolpathPath* const path_ptr, const Slic3r::ExtrusionPath* s_path_ptr, bool reversed, double path_z, const ON_Xform& transform, const ON_3dVector& dir, bool is_small_perimeter, bool is_first_layer) const {
     double s_path_height = s_path_ptr->height();
     double s_path_width = s_path_ptr->width();
     double s_path_volume = s_path_ptr->mm3_per_mm();
     // the speed is constant along the path
     const double speed = getSpeedForExtrusionRole(s_path_ptr->role(), is_small_perimeter, is_first_layer);
 
-    for (const Slic3r::Point& s_point : s_path_ptr->polyline) {
+    const Slic3r::Points& s_points = s_path_ptr->polyline.points;
+    for (size_t i = 0; i < s_points.size(); i++) {
+        const Slic3r::Point& s_point = reversed ? s_points[s_points.size() - 1 - i] : s_points[i];
         ON_3dPoint on_point(Slic3r::unscale<double>(s_point.x()), Slic3r::unscale<double>(s_point.y()), path_z);
         on_point.Transform(transform);
         // only add new points if they are not equal to the last point, 
@@ -526,10 +528,12 @@ void _collectExtrusionEntities(const Slic3r::ExtrusionEntityCollection& s_collec
     }
 }
 
-bool CamSlicer::processEntityCollection(const std::vector<const Slic3r::ExtrusionEntity*>& s_entities, double path_z, bool is_first_layer, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, Aion::Errorlist& errors)
+bool CamSlicer::processEntityCollection(const Slic3r::ExtrusionEntityReferences& s_entities, double path_z, bool is_first_layer, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, Aion::Errorlist& errors)
 {
     //iterate the extrusion entities
-    for (const Slic3r::ExtrusionEntity* s_entity : s_entities) {
+    for (const Slic3r::ExtrusionEntityReference& s_ref : s_entities) {
+        const Slic3r::ExtrusionEntity* s_entity = &s_ref.extrusion_entity();
+        const bool reversed = s_ref.flipped();
         auto path = std::make_unique<Aion::ToolpathPath>(tool_config);
         Aion::ToolpathPath* const path_ptr = path.get();
         path_ptr->speed = m_speed->getFloat();
@@ -539,7 +543,7 @@ bool CamSlicer::processEntityCollection(const std::vector<const Slic3r::Extrusio
         if (isExtrusionPath(s_entity)) {
             const Slic3r::ExtrusionPath* s_path_ptr = dynamic_cast<const Slic3r::ExtrusionPath*>(s_entity);
             path_ptr->getToolpathPoints()->reserve(s_path_ptr->polyline.size());
-            createToolpathForSlicerpath(path_ptr, s_path_ptr, path_z, transform, dir, is_small_perimeter, is_first_layer);
+            createToolpathForSlicerpath(path_ptr, s_path_ptr, reversed, path_z, transform, dir, is_small_perimeter, is_first_layer);
         }
         // Handle MultiPath objects
         else if (isExtrusionMultiPath(s_entity)) {
@@ -549,8 +553,10 @@ bool CamSlicer::processEntityCollection(const std::vector<const Slic3r::Extrusio
                 point_count += s_path.polyline.size();
             }
             path_ptr->getToolpathPoints()->reserve(point_count);
-            for (const Slic3r::ExtrusionPath& s_path : s_mpath_ptr->paths) {
-                createToolpathForSlicerpath(path_ptr, &s_path, path_z, transform, dir, is_small_perimeter, is_first_layer);
+            for (size_t i = 0; i < s_mpath_ptr->paths.size(); i++) {
+                // path index depends on reversed flag.
+                const Slic3r::ExtrusionPath& s_path = reversed ? s_mpath_ptr->paths[s_mpath_ptr->paths.size() - 1 - i] : s_mpath_ptr->paths[i];
+                createToolpathForSlicerpath(path_ptr, &s_path, reversed, path_z, transform, dir, is_small_perimeter, is_first_layer);
             }
         }
         // Handle ExtrusionLoop objects
@@ -561,8 +567,10 @@ bool CamSlicer::processEntityCollection(const std::vector<const Slic3r::Extrusio
                 point_count += s_path.polyline.size();
             }
             path_ptr->getToolpathPoints()->reserve(point_count);
-            for (const Slic3r::ExtrusionPath& s_path : s_loop_ptr->paths) {
-                createToolpathForSlicerpath(path_ptr, &s_path, path_z, transform, dir, is_small_perimeter, is_first_layer);
+            for (size_t i = 0; i < s_loop_ptr->paths.size(); i++) {
+                // path index depends on reversed flag.
+                const Slic3r::ExtrusionPath& s_path = reversed ? s_loop_ptr->paths[s_loop_ptr->paths.size() - 1 - i] : s_loop_ptr->paths[i];
+                createToolpathForSlicerpath(path_ptr, &s_path, reversed, path_z, transform, dir, is_small_perimeter, is_first_layer);
             }
         }
         // Handle unknown extrusion types and stop processing this entity

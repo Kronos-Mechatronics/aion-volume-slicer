@@ -61,15 +61,16 @@ private:
 	// Append the points of a Slic3r ExtrusionPath to a ToolpathPath
 	// @param path_ptr: pointer to the ToolpathPath to fill
 	// @param s_path_ptr: pointer to the Slic3r ExtrusionPath to convert
+	// @param reversed: whether the points of the path are appended in reverse order
 	// @param path_z: Z height of the path
 	// @param transform: transformation to apply to the points
 	// @param dir: direction vector to apply to the points
 	// @param is_small_perimeter: whether the path belongs to a perimeter not longer than SMALL_PERIMETER_LENGTH
 	// @param is_first_layer: whether the path is on the first layer
-	void createToolpathForSlicerpath(Aion::ToolpathPath* const path_ptr, const Slic3r::ExtrusionPath* s_path_ptr, double path_z, const ON_Xform& transform, const ON_3dVector& dir, bool is_small_perimeter, bool is_first_layer) const;
+	void createToolpathForSlicerpath(Aion::ToolpathPath* const path_ptr, const Slic3r::ExtrusionPath* s_path_ptr, bool reversed, double path_z, const ON_Xform& transform, const ON_3dVector& dir, bool is_small_perimeter, bool is_first_layer) const;
 
 	// convert each extrusion entity (path, multipath or loop) into one ToolpathPath with wiping at start and end.
-    // @param s_entities: the Slic3r extrusion entities to convert
+    // @param s_entities: the Slic3r extrusion entities to convert in print order, flipped entities are printed in reverse direction
     // @param path_z: layer height in slicer coordinates
     // @param is_first_layer: whether the path is on the first layer
     // @param tool_config: pointer to the tool config to use for the extrusion
@@ -77,7 +78,7 @@ private:
     // @param dir: direction vector to apply to the points
     // @param errors[out]: warnings and errors encountered during conversion
     // @return false if an entity has an unsupported type, a warning is added then and slicing should stop
-	bool processEntityCollection(const std::vector<const Slic3r::ExtrusionEntity*>& s_entities, double path_z, bool is_first_layer, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, Aion::Errorlist& errors);
+	bool processEntityCollection(const Slic3r::ExtrusionEntityReferences& s_entities, double path_z, bool is_first_layer, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, Aion::Errorlist& errors);
 
 private:
 	// Components of the volume structure object in the Rhino scene
