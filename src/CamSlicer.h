@@ -65,16 +65,21 @@ private:
 	// @param transform: transformation to apply to the points
 	// @param dir: direction vector to apply to the points
 	// @param is_small_perimeter: whether the path belongs to a perimeter not longer than SMALL_PERIMETER_LENGTH
-	void createToolpathForSlicerpath(Aion::ToolpathPath* const path_ptr, const Slic3r::ExtrusionPath* s_path_ptr, double path_z, const ON_Xform& transform, const ON_3dVector& dir, bool is_small_perimeter) const;
+	// @param is_first_layer: whether the path is on the first layer
+	void createToolpathForSlicerpath(Aion::ToolpathPath* const path_ptr, const Slic3r::ExtrusionPath* s_path_ptr, double path_z, const ON_Xform& transform, const ON_3dVector& dir, bool is_small_perimeter, bool is_first_layer) const;
 
 	// convert each extrusion entity (path, multipath or loop) of a flat collection into one ToolpathPath with wiping at start and end.
-	// path_z is the layer height in slicer coordinates, transform maps slicer coordinates back into the Rhino scene.
-	// if a path does not start where the previous toolpath ended, a ToolpathTravel is inserted that lifts 1 mm along
-	// the tool direction, moves above the start of the next path and approaches it. The results are appended to m_toolpaths.
-	void processEntityCollection(const Slic3r::ExtrusionEntityCollection& s_collection, double path_z, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir);
+    // @param s_collection: reference to the Slic3r ExtrusionEntityCollection to convert
+    // @param path_z: layer height in slicer coordinates
+    // @param is_first_layer: whether the path is on the first layer
+    // @param tool_config: pointer to the tool config to use for the extrusion
+    // @param transform: transformation to apply to the points
+    // @param dir: direction vector to apply to the points
+	void processEntityCollection(const Slic3r::ExtrusionEntityCollection& s_collection, double path_z, bool is_first_layer, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir);
 
-	// collect all extrusion entities of a layer into one flat collection (no nested collections).
-	// support layers contribute their support fills, object layers the perimeters followed by the fills of each region.
+	// collect all extrusion entities of a layer into one flat collection (no nested collections). 
+    // @param s_layer: pointer to the Slic3r Layer to convert
+    // @param collection: reference to the Slic3r ExtrusionEntityCollection to fill
 	void createFlatCollectionFromLayer(const Slic3r::Layer* s_layer, Slic3r::ExtrusionEntityCollection& collection);
 
 private:

@@ -482,27 +482,31 @@ double CamSlicer::getSpeedForExtrusionRole(Slic3r::ExtrusionRole s_role, bool is
     return speed;
 }
 
-void CamSlicer::createToolpathForSlicerpath(Aion::ToolpathPath* const path_ptr, const Slic3r::ExtrusionPath* s_path_ptr, double path_z, const ON_Xform& transform, const ON_3dVector& dir, bool is_small_perimeter) const {
+void CamSlicer::createToolpathForSlicerpath(Aion::ToolpathPath* const path_ptr, const Slic3r::ExtrusionPath* s_path_ptr, double path_z, const ON_Xform& transform, const ON_3dVector& dir, bool is_small_perimeter, bool is_first_layer) const {
     double s_path_height = s_path_ptr->height();
     double s_path_width = s_path_ptr->width();
     double s_path_volume = s_path_ptr->mm3_per_mm();
     // the speed is constant along the path
-    const bool is_first_layer = path_z < 0.01;
     const double speed = getSpeedForExtrusionRole(s_path_ptr->role(), is_small_perimeter, is_first_layer);
 
     for (const Slic3r::Point& s_point : s_path_ptr->polyline) {
-        ON_3dPoint on_point = ON_Point(Slic3r::unscale<double>(s_point.x()), Slic3r::unscale<double>(s_point.y()), path_z);
+        ON_3dPoint on_point(Slic3r::unscale<double>(s_point.x()), Slic3r::unscale<double>(s_point.y()), path_z);
         on_point.Transform(transform);
-        if (!path_ptr->hasToolpathPoints() || path_ptr->getLastPoint()->getPoint() != on_point) {
+        // only add new points if they are not equal to the last point, 
+        Aion::ToolpathElement* last_point = path_ptr->getLastPoint();
+        if (!last_point || last_point->getPoint().DistanceTo(on_point) > slicerEPS) {
             path_ptr->appendPoint(on_point, dir);
+            last_point = path_ptr->getLastPoint();
         }
-        path_ptr->getLastPoint()->setWidth(s_path_width, s_path_height);
-        path_ptr->getLastPoint()->setmm3_per_mm(s_path_volume);
-        path_ptr->getLastPoint()->setSpeed(speed);
+        // setWidth must be called first, it sets the height that setmm3_per_mm needs. setmm3_per_mm then
+        // recomputes the width as mm3_per_mm / height, so the extruded volume matches the slicer (rounded extrusion edges).
+        last_point->setWidth(s_path_width, s_path_height);
+        last_point->setmm3_per_mm(s_path_volume);
+        last_point->setSpeed(speed);
     }
 }
 
-void CamSlicer::processEntityCollection(const Slic3r::ExtrusionEntityCollection& s_collection, double path_z, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir)
+void CamSlicer::processEntityCollection(const Slic3r::ExtrusionEntityCollection& s_collection, double path_z, bool is_first_layer, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir)
 {
     //iterate the extrusion entities of the collection
     for (Slic3r::ExtrusionEntity* s_entity : s_collection) {
@@ -512,18 +516,18 @@ void CamSlicer::processEntityCollection(const Slic3r::ExtrusionEntityCollection&
         const bool is_small_perimeter = s_entity->role().is_perimeter() && s_entity->length() <= SMALL_PERIMETER_LENGTH;
         if (isExtrusionPath(s_entity)) {
             const Slic3r::ExtrusionPath* s_path_ptr = dynamic_cast<const Slic3r::ExtrusionPath*>(s_entity);
-            createToolpathForSlicerpath(path_ptr, s_path_ptr, path_z, transform, dir, is_small_perimeter);
+            createToolpathForSlicerpath(path_ptr, s_path_ptr, path_z, transform, dir, is_small_perimeter, is_first_layer);
         }
         else if (isExtrusionMultiPath(s_entity)) {
             const Slic3r::ExtrusionMultiPath* s_mpath_ptr = dynamic_cast<const Slic3r::ExtrusionMultiPath*>(s_entity);
             for (const Slic3r::ExtrusionPath& s_path : s_mpath_ptr->paths) {
-                createToolpathForSlicerpath(path_ptr, &s_path, path_z, transform, dir, is_small_perimeter);
+                createToolpathForSlicerpath(path_ptr, &s_path, path_z, transform, dir, is_small_perimeter, is_first_layer);
             }
         }
         else if (isExtrusionLoop(s_entity)) {
             const Slic3r::ExtrusionLoop* s_loop_ptr = dynamic_cast<const Slic3r::ExtrusionLoop*>(s_entity);
             for (const Slic3r::ExtrusionPath& s_path : s_loop_ptr->paths) {
-                createToolpathForSlicerpath(path_ptr, &s_path, path_z, transform, dir, is_small_perimeter);
+                createToolpathForSlicerpath(path_ptr, &s_path, path_z, transform, dir, is_small_perimeter, is_first_layer);
             }
         }
         else {
@@ -670,10 +674,10 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
 
         // Generate possible skirt and brim paths
         if (s_print.has_skirt()) {
-            processEntityCollection(s_print.skirt().flatten(), 0, tool_config, transform, dir);
+            processEntityCollection(s_print.skirt().flatten(), 0, true, tool_config, transform, dir);
         }
         if (s_print.has_brim()) {
-            processEntityCollection(s_print.brim().flatten(), 0, tool_config, transform, dir);
+            processEntityCollection(s_print.brim().flatten(), 0, true, tool_config, transform, dir);
         }
 
         //iterate over objects in print and layers in object to generate toolpaths
