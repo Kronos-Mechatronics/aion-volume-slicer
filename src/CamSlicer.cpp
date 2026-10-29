@@ -4,6 +4,7 @@
 #include "InteractiveSelection.h"
 #include "Geometry5X.h"
 #include <format.hpp>
+#include <ShortestPath.hpp>
 
 // Baseline PrusaSlicer config, shipped next to the plugin .rhp
 static const wchar_t* BASELINE_CONFIG_FILENAME = L"Aion_prusa_config.ini";
@@ -499,7 +500,7 @@ void CamSlicer::createToolpathForSlicerpath(Aion::ToolpathPath* const path_ptr, 
         const Slic3r::Point& s_point = reversed ? s_points[s_points.size() - 1 - i] : s_points[i];
         ON_3dPoint on_point(Slic3r::unscale<double>(s_point.x()), Slic3r::unscale<double>(s_point.y()), path_z);
         on_point.Transform(transform);
-        // only add new points if they are not equal to the last point, 
+        // only add new points if they are not equal to the last point,
         Aion::ToolpathElement* last_point = path_ptr->getLastPoint();
         if (!last_point || last_point->getPoint().DistanceTo(on_point) > slicerEPS) {
             path_ptr->appendPoint(on_point, dir);
@@ -513,17 +514,67 @@ void CamSlicer::createToolpathForSlicerpath(Aion::ToolpathPath* const path_ptr, 
     }
 }
 
-// Collect pointers to all extrusion entities of a collection and its nested collections in their stored order
-// @param s_collection: collection to collect the entities from
-// @param s_entities[out]: vector the entities are appended to
-void _collectExtrusionEntities(const Slic3r::ExtrusionEntityCollection& s_collection, std::vector<const Slic3r::ExtrusionEntity*>& s_entities) {
-    for (const Slic3r::ExtrusionEntity* s_entity : s_collection.entities) {
-        if (s_entity->is_collection()) {
-            // recursively collect the entities of the nested collection
-            _collectExtrusionEntities(*static_cast<const Slic3r::ExtrusionEntityCollection*>(s_entity), s_entities);
+// Append references to an extrusion entity
+// @param s_entity: entity or collection to append
+// @param flipped: whether the entities are printed in reverse direction, loops are never flipped
+// @param s_entities[out]: vector the references are appended to
+void _appendExtrusionEntities(const Slic3r::ExtrusionEntity& s_entity, bool flipped, Slic3r::ExtrusionEntityReferences& s_entities) {
+    if (s_entity.is_collection()) {
+        for (const Slic3r::ExtrusionEntity* s_child : static_cast<const Slic3r::ExtrusionEntityCollection&>(s_entity).entities) {
+            _appendExtrusionEntities(*s_child, flipped, s_entities);
         }
-        else {
-            s_entities.push_back(s_entity);
+    }
+    else {
+        s_entities.emplace_back(s_entity, flipped && !s_entity.is_loop());
+    }
+}
+
+// Update the last print position to the end point of the last extrusion
+// @param s_entities: extrusions in print order
+// @param last_pos[in, out]: last print position in slicer coordinates
+void _updateLastPosition(const Slic3r::ExtrusionEntityReferences& s_entities, Slic3r::Point& last_pos) {
+    if (!s_entities.empty()) {
+        const Slic3r::ExtrusionEntityReference& s_last = s_entities.back();
+        last_pos = s_last.flipped() ? s_last.extrusion_entity().first_point() : s_last.extrusion_entity().last_point();
+    }
+}
+
+// Append the extrusions of a support layer 
+// @param s_layer: support layer to append the extrusions from
+// @param last_pos[in, out]: last print position in slicer coordinates, updated to the end of the appended extrusions
+// @param s_entities[out]: vector the references are appended to
+void _appendSupportLayerExtrusions(const Slic3r::SupportLayer& s_layer, Slic3r::Point& last_pos, Slic3r::ExtrusionEntityReferences& s_entities) {
+    for (const Slic3r::ExtrusionEntityReference& s_ref : Slic3r::chain_extrusion_references(s_layer.support_fills, &last_pos)) {
+        _appendExtrusionEntities(s_ref.extrusion_entity(), s_ref.flipped(), s_entities);
+    }
+    _updateLastPosition(s_entities, last_pos);
+}
+
+// Append all extrusions of a layer sorted by print island (connected area)
+// @param s_layer: object layer to append the extrusions from
+// @param last_pos[in, out]: last print position in slicer coordinates, updated to the end of the appended extrusions
+// @param s_entities[out]: vector the references are appended to
+void _appendObjectLayerExtrusionsSortedByIsland(const Slic3r::Layer& s_layer, Slic3r::Point& last_pos, Slic3r::ExtrusionEntityReferences& s_entities) {
+    for (size_t slice_idx : s_layer.lslice_indices_sorted_by_print_order) {
+        const Slic3r::LayerSlice& s_slice = s_layer.lslices_ex[slice_idx];
+        std::vector<std::reference_wrapper<const Slic3r::LayerIsland>> s_islands(s_slice.islands.begin(), s_slice.islands.end());
+        Slic3r::chain_and_reorder_layer_islands(s_islands, &last_pos);
+
+        for (const Slic3r::LayerIsland& s_island : s_islands) {
+            // the perimeters of an island are already ordered by the perimeter generator
+            const Slic3r::LayerRegion* s_perimeter_region = s_layer.get_region(s_island.perimeters.region());
+            for (uint32_t perimeter_id : s_island.perimeters) {
+                _appendExtrusionEntities(*s_perimeter_region->perimeters().entities[perimeter_id], false, s_entities);
+            }
+            // the fills (including the thin walls of the classic perimeter generator) can belong to several regions
+            for (const Slic3r::LayerExtrusionRange& s_fill_range : s_island.fills) {
+                const Slic3r::LayerRegion* s_fill_region = s_layer.get_region(s_fill_range.region());
+                for (uint32_t fill_id : s_fill_range) {
+                    _appendExtrusionEntities(*s_fill_region->fills().entities[fill_id], false, s_entities);
+                }
+            }
+            // the next islands are chained from the end of this one
+            _updateLastPosition(s_entities, last_pos);
         }
     }
 }
@@ -737,12 +788,15 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
         return false;
     }
 
-    // vector for the flattened extrusion entities of the print (reused after clearing)
-    std::vector<const Slic3r::ExtrusionEntity*> s_entities;
+    // extrusions of the current layer in print order (reused after clearing)
+    Slic3r::ExtrusionEntityReferences s_entities;
+    // end point of the last extrusion in slicer coordinates, the following extrusions are ordered starting there
+    Slic3r::Point last_pos = Slic3r::Point::Zero();
 
-    // Generate possible skirt and brim paths
+    // Generate possible skirt and brim paths, both are printed in their stored order like in PrusaSlicer
     if (s_print.has_skirt()) {
-        _collectExtrusionEntities(s_print.skirt(), s_entities);
+        _appendExtrusionEntities(s_print.skirt(), false, s_entities);
+        _updateLastPosition(s_entities, last_pos);
         if (!processEntityCollection(s_entities, 0, true, tool_config, to_scene, dir, errors)) {
             m_toolpaths.clear();
             return false;
@@ -750,7 +804,8 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
     }
     if (s_print.has_brim()) {
         s_entities.clear();
-        _collectExtrusionEntities(s_print.brim(), s_entities);
+        _appendExtrusionEntities(s_print.brim(), false, s_entities);
+        _updateLastPosition(s_entities, last_pos);
         if (!processEntityCollection(s_entities, 0, true, tool_config, to_scene, dir, errors)) {
             m_toolpaths.clear();
             return false;
@@ -774,7 +829,7 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
             // every support or object layer that lies on the build plate (bottom_z = 0) is a first layer
             const bool next_is_support = sup_it != sup_end && (lay_it == lay_end || (*sup_it)->bottom_z() <= (*lay_it)->bottom_z());
             if (next_is_support) {
-                _collectExtrusionEntities((*sup_it)->support_fills, s_entities);
+                _appendSupportLayerExtrusions(**sup_it, last_pos, s_entities);
                 if (!processEntityCollection(s_entities, (*sup_it)->bottom_z(), (*sup_it)->bottom_z() < slicerEPS, tool_config, to_scene, dir, errors)) {
                     m_toolpaths.clear();
                     return false;
@@ -782,11 +837,7 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
                 ++sup_it;
             }
             else {
-                // perimeters before fills for each region, the thin walls are part of the fills
-                for (const Slic3r::LayerRegion* region : (*lay_it)->regions()) {
-                    _collectExtrusionEntities(region->perimeters(), s_entities);
-                    _collectExtrusionEntities(region->fills(), s_entities);
-                }
+                _appendObjectLayerExtrusionsSortedByIsland(**lay_it, last_pos, s_entities);
                 if (!processEntityCollection(s_entities, (*lay_it)->bottom_z(), (*lay_it)->bottom_z() < slicerEPS, tool_config, to_scene, dir, errors)) {
                     m_toolpaths.clear();
                     return false;
