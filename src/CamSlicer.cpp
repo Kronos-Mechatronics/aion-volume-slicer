@@ -389,10 +389,11 @@ bool CamSlicer::loadSlicerConfig(Slic3r::DynamicPrintConfig& s_config, Aion::Err
 // Generate the Slic3r TriangleMesh from the Rhino ON_Mesh
 // Quads are split into two triangles and inside out meshes are flipped.
 // @param on_mesh: the Rhino ON_Mesh to convert
+// @param xform: transformation from scene to slicer coordinates
 // @param s_mesh[out]: the created Slic3r TriangleMesh
 // @param errors[out]: a warning is added if the mesh can not be converted, an info if it has open or non-manifold edges
 // @return false if the mesh could not be converted
-bool _createSlicerMesh(const ON_Mesh& on_mesh, Slic3r::TriangleMesh& s_mesh, Aion::Errorlist& errors) {
+bool _createSlicerMesh(const ON_Mesh& on_mesh, const ON_Xform& xform, Slic3r::TriangleMesh& s_mesh, Aion::Errorlist& errors) {
     const int vertex_count = on_mesh.VertexCount();
     // the double precision vertices are more accurate, but only usable if they are in sync with the float vertices
     const bool use_double_vertices = on_mesh.HasSynchronizedDoubleAndSinglePrecisionVertices();
@@ -400,7 +401,8 @@ bool _createSlicerMesh(const ON_Mesh& on_mesh, Slic3r::TriangleMesh& s_mesh, Aio
     indexed_triangle_set s_its;
     s_its.vertices.reserve(vertex_count);
     for (int i = 0; i < vertex_count; i++) {
-        const ON_3dPoint on_vert = use_double_vertices ? on_mesh.m_dV[i] : ON_3dPoint(on_mesh.m_V[i]);
+        ON_3dPoint on_vert = use_double_vertices ? on_mesh.m_dV[i] : ON_3dPoint(on_mesh.m_V[i]);
+        on_vert.Transform(xform);
         if (!on_vert.IsValid()) {
             errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Slicer object has invalid mesh vertices."));
             return false;
@@ -660,22 +662,20 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
         }
     }
 
-    // Compute the bounding box of all meshes and calculate the rotation and translation place them on the print bed.
-    ON_BoundingBox init_bbox;
-    for (std::unique_ptr<ON_Mesh>& on_mesh_ptr : on_meshes) {
-        init_bbox.Union(on_mesh_ptr->BoundingBox());
-    }
+    // Rotate the slicing direction to +Z and move the bottom center of the rotated bounding box to the print bed center
     ON_Xform rot_xform;
-    rot_xform.Rotation(dir, ON_3dVector::ZAxis, init_bbox.Center());
+    rot_xform.Rotation(dir, ON_3dVector::ZAxis, ON_3dPoint::Origin);
+    // bounding box of the rotated meshes
     ON_BoundingBox rot_bbox;
-    for (std::unique_ptr<ON_Mesh>& on_mesh_ptr : on_meshes) {
-        on_mesh_ptr->Transform(rot_xform);
-        rot_bbox.Union(on_mesh_ptr->BoundingBox());
+    for (const std::unique_ptr<ON_Mesh>& on_mesh_ptr : on_meshes) {
+        on_mesh_ptr->GetTightBoundingBox(rot_bbox, true, &rot_xform);
     }
     ON_3dPoint point = rot_bbox.Center();
     point.z = rot_bbox.Min().z;
-    ON_Xform transform = ON_Xform::TranslationTransformation(ON_3dPoint::Origin - point) * rot_xform;
-    transform.Invert();
+    // scene to slicer transform
+    const ON_Xform to_slicer = ON_Xform::TranslationTransformation(ON_3dPoint::Origin - point) * rot_xform;
+    // slicer to scene transform
+    const ON_Xform to_scene = to_slicer.Inverse();
 
     // Create a Slic3r model and print
     Slic3r::Model s_model;
@@ -694,10 +694,9 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
     }
 
     // Create slicer Meshes from the ON_Meshes and add them to the Slic3r model
-    for (std::unique_ptr<ON_Mesh>& on_mesh_ptr : on_meshes) {
-        on_mesh_ptr->Translate(ON_3dPoint::Origin - point);
+    for (const std::unique_ptr<ON_Mesh>& on_mesh_ptr : on_meshes) {
         Slic3r::TriangleMesh s_mesh;
-        if (!_createSlicerMesh(*on_mesh_ptr, s_mesh, errors)) {
+        if (!_createSlicerMesh(*on_mesh_ptr, to_slicer, s_mesh, errors)) {
             return false;
         }
         s_mo_ptr->add_volume(std::move(s_mesh));
@@ -725,12 +724,12 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
     // Generate possible skirt and brim paths
     if (s_print.has_skirt()) {
         _collectExtrusionEntities(s_print.skirt(), s_entities);
-        processEntityCollection(s_entities, 0, true, tool_config, transform, dir, errors);
+        processEntityCollection(s_entities, 0, true, tool_config, to_scene, dir, errors);
     }
     if (s_print.has_brim()) {
         s_entities.clear();
         _collectExtrusionEntities(s_print.brim(), s_entities);
-        processEntityCollection(s_entities, 0, true, tool_config, transform, dir, errors);
+        processEntityCollection(s_entities, 0, true, tool_config, to_scene, dir, errors);
     }
 
     //iterate over objects in print and layers in object to generate toolpaths
@@ -746,7 +745,7 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
             const bool next_is_support = sup_it != sup_end && (lay_it == lay_end || (*sup_it)->bottom_z() <= (*lay_it)->bottom_z());
             if (next_is_support) {
                 _collectExtrusionEntities((*sup_it)->support_fills, s_entities);
-                processEntityCollection(s_entities, (*sup_it)->bottom_z(), (*sup_it)->bottom_z() < slicerEPS, tool_config, transform, dir, errors);
+                processEntityCollection(s_entities, (*sup_it)->bottom_z(), (*sup_it)->bottom_z() < slicerEPS, tool_config, to_scene, dir, errors);
                 ++sup_it;
             }
             else {
@@ -755,7 +754,7 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
                     _collectExtrusionEntities(region->perimeters(), s_entities);
                     _collectExtrusionEntities(region->fills(), s_entities);
                 }
-                processEntityCollection(s_entities, (*lay_it)->bottom_z(), (*lay_it)->bottom_z() < slicerEPS, tool_config, transform, dir, errors);
+                processEntityCollection(s_entities, (*lay_it)->bottom_z(), (*lay_it)->bottom_z() < slicerEPS, tool_config, to_scene, dir, errors);
                 ++lay_it;
             }
         }
