@@ -641,6 +641,12 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
         return false;
     }
 
+    // check height must be lower than the width, otherwise the slicer will fail
+    if (m_height->getFloat() >= m_width->getFloat()) {
+        errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Slicing not possible: Layer height must be lower than the extrusion width."));
+        return false;
+    }
+
     // Mesh all the selected objects and collect the ON_Meshes
     std::vector<std::unique_ptr<ON_Mesh>> on_meshes;
     on_meshes.reserve(m_volume_components->getComponents()->size());
