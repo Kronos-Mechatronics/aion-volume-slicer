@@ -302,6 +302,14 @@ CamSlicer::CamSlicer(const ON_UUID& plugin_uuid)
     m_brim_width->min = 0.0;
     m_brim_width->detail_level = Aion::ConfigDetailLevel::levelTwo;
 
+    m_travel_z_hop = new Aion::ConfigOptionFloat(0.5);
+    this->m_options.addOption("travelZHop", m_travel_z_hop);
+    m_travel_z_hop->label = "Travel Z hop";
+    m_travel_z_hop->tooltip = "Height the tool is lifted along the tool direction for the travel moves between the slicer paths.\n0 travels without lifting the tool. -1 disables these travel moves, Aion then inserts its global travel moves between all paths.";
+    m_travel_z_hop->unit = "mm";
+    m_travel_z_hop->min = -1.0;
+    m_travel_z_hop->detail_level = Aion::ConfigDetailLevel::levelTwo;
+
     m_slicer_options = new Aion::ConfigOptionString();
     this->m_options.addOption("slicerOptions", m_slicer_options);
     m_slicer_options->label = "Configuration options";
@@ -607,8 +615,9 @@ void CamSlicer::processSmoothPath(const Slic3r::GCode::SmoothPath& s_path, doubl
     this->generateWiping(path_ptr, true);
     this->generateWiping(path_ptr, false);
 
-    // generate travel moves between the last point of the previous path and the first point of this path
-    if (!m_toolpaths.empty() && m_toolpaths.back()->hasToolpathPoints() && path_ptr->hasToolpathPoints()) {
+    // generate travel moves between the last path and this one, if the travel_z_hop is enabled otherwise Aion will generate its own travel moves between all paths
+    const double z_hop = m_travel_z_hop->getFloat();
+    if (z_hop >= 0 &&!m_toolpaths.empty() && m_toolpaths.back()->hasToolpathPoints() && path_ptr->hasToolpathPoints()) {
         Aion::ToolpathElement& last = m_toolpaths.back()->getToolpathPoints()->back();
         if (last.getPoint().DistanceTo(path_ptr->getFirstPoint()->getPoint()) > slicerEPS) {
             auto travel = std::make_unique<Aion::ToolpathTravel>(tool_config);
@@ -616,12 +625,12 @@ void CamSlicer::processSmoothPath(const Slic3r::GCode::SmoothPath& s_path, doubl
             ON_3dVector from_v = last.getNormalIn();
             travel->appendPoint(from_p, from_v);
             from_v.Unitize();
-            from_p.Transform(ON_Xform::TranslationTransformation(from_v));
+            from_p.Transform(ON_Xform::TranslationTransformation(from_v * z_hop));
             travel->appendPoint(from_p, last.getNormalIn());
             ON_3dPoint to_p = path_ptr->getFirstPoint()->getPoint();
             ON_3dVector to_v = path_ptr->getFirstPoint()->getNormalIn();
             to_v.Unitize();
-            to_p.Transform(ON_Xform::TranslationTransformation(to_v));
+            to_p.Transform(ON_Xform::TranslationTransformation(to_v * z_hop));
             travel->appendPoint(to_p, path_ptr->getFirstPoint()->getNormalIn());
             travel->appendPoint(path_ptr->getFirstPoint()->getPoint(), path_ptr->getFirstPoint()->getNormalIn());
 
@@ -964,6 +973,7 @@ Aion::OptionsGroups CamSlicer::getOptionsByGroup()
         group_other.name = "Other";
         group_other.options.push_back(m_support);
         group_other.options.push_back(m_brim_width);
+        group_other.options.push_back(m_travel_z_hop);
         group_other.options.push_back(m_slicer_options);
         result.push_back(group_other);
     }
