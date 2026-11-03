@@ -9,6 +9,8 @@
 //libslic3r includes
 #include <Model.hpp>
 #include <Print.hpp>
+#include <libslic3r/GCode/ExtrusionOrder.hpp>
+#include <optional>
 
 class CamSlicer : public Aion::CamBase
 {
@@ -37,10 +39,6 @@ public:
     // Respond to modified geometry in the document
     void onObjectChanged(const ON_UUID& uuid, ON::object_type type, bool deleted) override;
 
-	bool isExtrusionPath(const Slic3r::ExtrusionEntity* e) { return dynamic_cast<const Slic3r::ExtrusionPath*>(e) != nullptr; }
-	bool isExtrusionMultiPath(const Slic3r::ExtrusionEntity* e) { return dynamic_cast<const Slic3r::ExtrusionMultiPath*>(e) != nullptr; }
-	bool isExtrusionLoop(const Slic3r::ExtrusionEntity* e) { return e->is_loop(); }
-
 private:
     // Apply the options of this cam block to the slicer config
     // @param s_config: reference to the slicer config to apply the options to
@@ -58,27 +56,36 @@ private:
 	// @return the speed for the given extrusion role in mm/s
 	double getSpeedForExtrusionRole(Slic3r::ExtrusionRole s_role, bool is_small_perimeter, bool is_first_layer) const;
 
-	// Append the points of a Slic3r ExtrusionPath to a ToolpathPath
+	// Append the points of one element of a Slic3r SmoothPath to a ToolpathPath
 	// @param path_ptr: pointer to the ToolpathPath to fill
-	// @param s_path_ptr: pointer to the Slic3r ExtrusionPath to convert
-	// @param reversed: whether the points of the path are appended in reverse order
+	// @param s_element: the SmoothPath element to convert
 	// @param path_z: Z height of the path
 	// @param transform: transformation to apply to the points
 	// @param dir: direction vector to apply to the points
 	// @param is_small_perimeter: whether the path belongs to a perimeter not longer than SMALL_PERIMETER_LENGTH
 	// @param is_first_layer: whether the path is on the first layer
-	void createToolpathForSlicerpath(Aion::ToolpathPath* const path_ptr, const Slic3r::ExtrusionPath* s_path_ptr, bool reversed, double path_z, const ON_Xform& transform, const ON_3dVector& dir, bool is_small_perimeter, bool is_first_layer) const;
+	void createToolpathForSlicerpath(Aion::ToolpathPath* const path_ptr, const Slic3r::GCode::SmoothPathElement& s_element, double path_z, const ON_Xform& transform, const ON_3dVector& dir, bool is_small_perimeter, bool is_first_layer) const;
 
-	// convert each extrusion entity (path, multipath or loop) into one ToolpathPath with wiping at start and end.
-    // @param s_entities: the Slic3r extrusion entities to convert in print order, flipped entities are printed in reverse direction
-    // @param path_z: layer height in slicer coordinates
-    // @param is_first_layer: whether the path is on the first layer
-    // @param tool_config: pointer to the tool config to use for the extrusion
-    // @param transform: transformation to apply to the points
-    // @param dir: direction vector to apply to the points
-    // @param errors[out]: warnings and errors encountered during conversion
-    // @return false if an entity has an unsupported type, a warning is added then and slicing should stop
-	bool processEntityCollection(const Slic3r::ExtrusionEntityReferences& s_entities, double path_z, bool is_first_layer, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, Aion::Errorlist& errors);
+	// Convert a Slic3r SmoothPath into one ToolpathPath with wiping
+	// @param s_path: the SmoothPath to convert
+	// @param path_z: Z height of the path
+	// @param is_small_perimeter: whether the path belongs to a perimeter not longer than SMALL_PERIMETER_LENGTH
+	// @param is_first_layer: whether the path is on the first layer
+	// @param tool_config: pointer to the tool config to use for the extrusion
+	// @param transform: transformation to apply to the points
+	// @param dir: direction vector to apply to the points
+	// @param last_pos[out]: updated to the last point of the path in print coordinates
+	void processSmoothPath(const Slic3r::GCode::SmoothPath& s_path, double path_z, bool is_small_perimeter, bool is_first_layer, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, std::optional<Slic3r::Point>& last_pos);
+
+	// Convert the sorted extrusions of one layer (from Slic3r::GCode::ExtrusionOrder::get_extrusions) into ToolpathPaths
+    // Order: skirt, brim, support, then the islands of the object layer and ironing.
+	// @param s_extrusions: the sorted extrusions of the layer
+	// @param s_layer_to_print: the object and support layer the extrusions belong to
+	// @param tool_config: pointer to the tool config to use for the extrusion
+	// @param transform: transformation to apply to the points
+	// @param dir: direction vector to apply to the points
+	// @param last_pos[out]: updated to the last point of the layer in print coordinates
+	void processSortedExtrusions(const std::vector<Slic3r::GCode::ExtrusionOrder::ExtruderExtrusions>& s_extrusions, const Slic3r::GCode::ObjectLayerToPrint& s_layer_to_print, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, std::optional<Slic3r::Point>& last_pos);
 
 private:
 	// Components of the volume structure object in the Rhino scene
@@ -127,4 +134,4 @@ private:
 	Aion::ConfigOptionString* m_slicer_options;
 	// small epsilon to compare if points are equal.
     double slicerEPS = 0.0001;
-};
+};

@@ -177,6 +177,8 @@ target_include_directories(libslic3r INTERFACE
     "${PRUSASLICER_INCLUDE_ROOT}/PrusaSlicer/bundled_deps/localesutils"
     "${PRUSASLICER_INCLUDE_ROOT}/PrusaSlicer/bundled_deps/admesh"
     "${PRUSASLICER_INCLUDE_ROOT}/PrusaSlicer/bundled_deps/tcbspan"
+    "${PRUSASLICER_INCLUDE_ROOT}/PrusaSlicer/bundled_deps/libigl"
+    "${PRUSASLICER_INCLUDE_ROOT}/PrusaSlicer/bundled_deps/ankerl"
     "${PRUSASLICER_DEPS_INCLUDE_DIR}"
     "${PRUSASLICER_DEPS_INCLUDE_DIR}/LibBGCode"
     "${PRUSASLICER_DEPS_INCLUDE_DIR}/eigen3"
