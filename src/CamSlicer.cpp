@@ -305,7 +305,7 @@ CamSlicer::CamSlicer(const ON_UUID& plugin_uuid)
     m_slicer_options = new Aion::ConfigOptionString();
     this->m_options.addOption("slicerOptions", m_slicer_options);
     m_slicer_options->label = "Configuration options";
-    m_slicer_options->tooltip = "Additional PrusaSlicer options in \".ini\" format (one \"key = value\" per line).\nThey are applied last and overwrite all other settings.";
+    m_slicer_options->tooltip = "Additional PrusaSlicer options in \".ini\" format (one \"key = value\" per line).\nThey are applied last and overwrite all other settings.\nExample:\nseam_position = rear\nfill_angle = 30\nironing = 1";
     m_slicer_options->multiline = true;
     m_slicer_options->detail_level = Aion::ConfigDetailLevel::levelTwo;
 }
