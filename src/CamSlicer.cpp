@@ -779,6 +779,13 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
         errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Invalid slicer configuration: " + config_error));
         return false;
     }
+    // inform about options the user can set in the configuration options, but which are not supported
+    if (s_config.opt_enum<Slic3r::ArcFittingType>("arc_fitting") != Slic3r::ArcFittingType::Disabled) {
+        errors.push_back(Aion::Error(Aion::ErrorClass::Info, "Arc fitting is not supported and is ignored."));
+    }
+    if (s_config.opt_enum<Slic3r::ScarfSeamPlacement>("scarf_seam_placement") != Slic3r::ScarfSeamPlacement::nowhere) {
+        errors.push_back(Aion::Error(Aion::ErrorClass::Info, "Scarf seams are not supported, a normal seam is placed instead."));
+    }
 
     // Create slicer Meshes from the ON_Meshes and add them to the Slic3r model
     for (const std::unique_ptr<ON_Mesh>& on_mesh_ptr : on_meshes) {
