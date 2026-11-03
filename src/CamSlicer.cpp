@@ -779,6 +779,11 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
         errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Invalid slicer configuration: " + config_error));
         return false;
     }
+    // Aion prints with one tool, Warning if multiple tools are configured in the slicer config.
+    if (s_config.option<Slic3r::ConfigOptionFloats>("nozzle_diameter")->size() > 1) {
+        errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Slicing not possible: Multiple tools are configured, only one tool is supported."));
+        return false;
+    }
     // inform about options the user can set in the configuration options, but which are not supported
     if (s_config.opt_enum<Slic3r::ArcFittingType>("arc_fitting") != Slic3r::ArcFittingType::Disabled) {
         errors.push_back(Aion::Error(Aion::ErrorClass::Info, "Arc fitting is not supported and is ignored."));
