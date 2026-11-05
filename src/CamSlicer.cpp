@@ -642,15 +642,21 @@ void CamSlicer::processSmoothPath(const Slic3r::GCode::SmoothPath& s_path, doubl
             auto travel = std::make_unique<Aion::ToolpathTravel>(tool_config);
             ON_3dPoint from_p = last.getPoint();
             ON_3dVector from_v = last.getNormalIn();
+            // start point
             travel->appendPoint(from_p, from_v);
-            from_v.Unitize();
-            from_p.Transform(ON_Xform::TranslationTransformation(from_v * z_hop));
-            travel->appendPoint(from_p, last.getNormalIn());
             ON_3dPoint to_p = path_ptr->getFirstPoint()->getPoint();
             ON_3dVector to_v = path_ptr->getFirstPoint()->getNormalIn();
-            to_v.Unitize();
-            to_p.Transform(ON_Xform::TranslationTransformation(to_v * z_hop));
-            travel->appendPoint(to_p, path_ptr->getFirstPoint()->getNormalIn());
+            if (z_hop > 0) {
+                // lift
+                from_v.Unitize();
+                from_p.Transform(ON_Xform::TranslationTransformation(from_v * z_hop));
+                travel->appendPoint(from_p, last.getNormalIn());
+                // unlift
+                to_v.Unitize();
+                to_p.Transform(ON_Xform::TranslationTransformation(to_v * z_hop));
+                travel->appendPoint(to_p, path_ptr->getFirstPoint()->getNormalIn());
+            }
+            // target point
             travel->appendPoint(path_ptr->getFirstPoint()->getPoint(), path_ptr->getFirstPoint()->getNormalIn());
 
             travel->height = last.getHeight();
