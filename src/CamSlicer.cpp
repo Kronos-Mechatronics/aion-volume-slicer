@@ -594,6 +594,8 @@ void CamSlicer::processSmoothPath(const Slic3r::GCode::SmoothPath& s_path, doubl
     auto path = std::make_unique<Aion::ToolpathPath>(tool_config);
     Aion::ToolpathPath* const path_ptr = path.get();
     path_ptr->speed = m_speed->getFloat();
+    // disable smart tool orientation to be safe.
+    path_ptr->smart_tool_orientation = false;
 
     // store the last position of the previous path and the start position of this path.
     const std::optional<Slic3r::Point> previous_pos = last_pos;
@@ -640,6 +642,7 @@ void CamSlicer::processSmoothPath(const Slic3r::GCode::SmoothPath& s_path, doubl
         Aion::ToolpathElement& last = m_toolpaths.back()->getToolpathPoints()->back();
         if (last.getPoint().DistanceTo(path_ptr->getFirstPoint()->getPoint()) > slicerEPS) {
             auto travel = std::make_unique<Aion::ToolpathTravel>(tool_config);
+            travel->smart_tool_orientation = false;
             ON_3dPoint from_p = last.getPoint();
             ON_3dVector from_v = last.getNormalIn();
             // start point
