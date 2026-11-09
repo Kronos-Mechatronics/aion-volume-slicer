@@ -491,7 +491,11 @@ double CamSlicer::getSpeedForExtrusionRole(Slic3r::ExtrusionRole s_role, bool is
     if (s_role == Slic3r::ExtrusionRole::SupportMaterialInterface) {
         return factor * m_support_interface_speed->getFloat();
     }
-    // roles without an own speed (e.g. ironing) use the print speed
+    // ironing speed it taken from the slicer config.
+    if (s_role == Slic3r::ExtrusionRole::Ironing) {
+        return m_print_config.ironing_speed.value;
+    }
+    // roles without an own speed use the print speed
     return speed;
 }
 
@@ -589,7 +593,7 @@ struct SlicerPathSmoothing {
     }
 };
 
-void CamSlicer::processSmoothPath(const Slic3r::GCode::SmoothPath& s_path, double path_z, bool is_small_perimeter, bool is_first_layer, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, const Slic3r::PrintConfig& s_print_config, bool& layer_change, std::optional<Slic3r::Point>& last_pos)
+void CamSlicer::processSmoothPath(const Slic3r::GCode::SmoothPath& s_path, double path_z, bool is_small_perimeter, bool is_first_layer, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, bool& layer_change, std::optional<Slic3r::Point>& last_pos)
 {
     auto path = std::make_unique<Aion::ToolpathPath>(tool_config);
     Aion::ToolpathPath* const path_ptr = path.get();
@@ -621,8 +625,8 @@ void CamSlicer::processSmoothPath(const Slic3r::GCode::SmoothPath& s_path, doubl
 
     // Get the last path to check if the travel distance is shorter than retract_before_travel.
     Aion::ToolpathPath* const last_path = m_toolpaths.empty() ? nullptr : dynamic_cast<Aion::ToolpathPath*>(m_toolpaths.back().get());
-    const bool short_travel = last_path && previous_pos && start_pos && (!layer_change || !s_print_config.retract_layer_change.get_at(0)) &&
-        Slic3r::unscale<double>((*start_pos - *previous_pos).cast<double>().norm()) < s_print_config.retract_before_travel.get_at(0);
+    const bool short_travel = last_path && previous_pos && start_pos && (!layer_change || !m_print_config.retract_layer_change.get_at(0)) &&
+        Slic3r::unscale<double>((*start_pos - *previous_pos).cast<double>().norm()) < m_print_config.retract_before_travel.get_at(0);
     layer_change = false;
 
     // Generate wiping moves for the last_path with the retraction depending on short_travel.
@@ -672,7 +676,7 @@ void CamSlicer::processSmoothPath(const Slic3r::GCode::SmoothPath& s_path, doubl
     m_toolpaths.emplace_back(std::move(path));
 }
 
-void CamSlicer::processSortedExtrusions(const std::vector<Slic3r::GCode::ExtrusionOrder::ExtruderExtrusions>& s_extrusions, const Slic3r::GCode::ObjectLayerToPrint& s_layer_to_print, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, const Slic3r::PrintConfig& s_print_config, std::optional<Slic3r::Point>& last_pos)
+void CamSlicer::processSortedExtrusions(const std::vector<Slic3r::GCode::ExtrusionOrder::ExtruderExtrusions>& s_extrusions, const Slic3r::GCode::ObjectLayerToPrint& s_layer_to_print, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, std::optional<Slic3r::Point>& last_pos)
 {
     // get the layer and the support bottom_z (they are grouped by top_z)
     const double layer_z = s_layer_to_print.layer()->bottom_z();
@@ -684,16 +688,16 @@ void CamSlicer::processSortedExtrusions(const std::vector<Slic3r::GCode::Extrusi
     for (const Slic3r::GCode::ExtrusionOrder::ExtruderExtrusions& s_extruder : s_extrusions) {
         // Generate toolpath for skirt and brim
         for (const std::pair<std::size_t, Slic3r::GCode::SmoothPath>& s_skirt : s_extruder.skirt) {
-            processSmoothPath(s_skirt.second, layer_z, false, layer_z < slicerEPS, tool_config, transform, dir, s_print_config, layer_change, last_pos);
+            processSmoothPath(s_skirt.second, layer_z, false, layer_z < slicerEPS, tool_config, transform, dir, layer_change, last_pos);
         }
         for (const Slic3r::GCode::ExtrusionOrder::BrimPath& s_brim : s_extruder.brim) {
-            processSmoothPath(s_brim.path, layer_z, false, layer_z < slicerEPS, tool_config, transform, dir, s_print_config, layer_change, last_pos);
+            processSmoothPath(s_brim.path, layer_z, false, layer_z < slicerEPS, tool_config, transform, dir, layer_change, last_pos);
         }
 
         for (const Slic3r::GCode::ExtrusionOrder::NormalExtrusions& s_normal : s_extruder.normal_extrusions) {
             // generate the support paths before printing the actual layers
             for (const Slic3r::GCode::ExtrusionOrder::SupportPath& s_support : s_normal.support_extrusions) {
-                processSmoothPath(s_support.path, support_z, false, support_z < slicerEPS, tool_config, transform, dir, s_print_config, layer_change, last_pos);
+                processSmoothPath(s_support.path, support_z, false, support_z < slicerEPS, tool_config, transform, dir, layer_change, last_pos);
             }
             // generate the actual layer paths
             for (const Slic3r::GCode::ExtrusionOrder::SliceExtrusions& s_slice : s_normal.slices_extrusions) {
@@ -704,21 +708,21 @@ void CamSlicer::processSortedExtrusions(const std::vector<Slic3r::GCode::Extrusi
                         for (const Slic3r::GCode::ExtrusionOrder::InfillRange& s_range : s_island.infill_ranges) {
                             // print all infill paths
                             for (const Slic3r::GCode::SmoothPath& s_path : s_range.items) {
-                                processSmoothPath(s_path, layer_z, false, layer_z < slicerEPS, tool_config, transform, dir, s_print_config, layer_change, last_pos);
+                                processSmoothPath(s_path, layer_z, false, layer_z < slicerEPS, tool_config, transform, dir, layer_change, last_pos);
                             }
                         }
                     }
                     // print all perimeter paths
                     for (const Slic3r::GCode::ExtrusionOrder::Perimeter& s_perimeter : s_island.perimeters) {
                         const bool is_small_perimeter = s_perimeter.extrusion_entity->role().is_perimeter() && s_perimeter.extrusion_entity->length() <= SMALL_PERIMETER_LENGTH;
-                        processSmoothPath(s_perimeter.smooth_path, layer_z, is_small_perimeter, layer_z < slicerEPS, tool_config, transform, dir, s_print_config, layer_change, last_pos);
+                        processSmoothPath(s_perimeter.smooth_path, layer_z, is_small_perimeter, layer_z < slicerEPS, tool_config, transform, dir, layer_change, last_pos);
                     }
                     // otherwise print perimeter first then infill
                     if (!s_island.infill_first) {
                         // print all infill paths
                         for (const Slic3r::GCode::ExtrusionOrder::InfillRange& s_range : s_island.infill_ranges) {
                             for (const Slic3r::GCode::SmoothPath& s_path : s_range.items) {
-                                processSmoothPath(s_path, layer_z, false, layer_z < slicerEPS, tool_config, transform, dir, s_print_config, layer_change, last_pos);
+                                processSmoothPath(s_path, layer_z, false, layer_z < slicerEPS, tool_config, transform, dir, layer_change, last_pos);
                             }
                         }
                     }
@@ -726,7 +730,7 @@ void CamSlicer::processSortedExtrusions(const std::vector<Slic3r::GCode::Extrusi
                 // ironing after all islands of the slice
                 for (const Slic3r::GCode::ExtrusionOrder::InfillRange& s_range : s_slice.ironing_extrusions) {
                     for (const Slic3r::GCode::SmoothPath& s_path : s_range.items) {
-                        processSmoothPath(s_path, layer_z, false, layer_z < slicerEPS, tool_config, transform, dir, s_print_config, layer_change, last_pos);
+                        processSmoothPath(s_path, layer_z, false, layer_z < slicerEPS, tool_config, transform, dir, layer_change, last_pos);
                     }
                 }
             }
@@ -818,19 +822,21 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
         errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Invalid slicer configuration: " + config_error));
         return false;
     }
+    // Apply the config to the m_print_config
+    m_print_config.apply(s_config, true);
     // Aion prints with one tool, Warning if multiple tools are configured in the slicer config.
-    if (s_config.option<Slic3r::ConfigOptionFloats>("nozzle_diameter")->size() > 1) {
+    if (m_print_config.nozzle_diameter.size() > 1) {
         errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Slicing not possible: Multiple tools are configured, only one tool is supported."));
         return false;
     }
     // inform about options the user can set in the configuration options, but which are not supported
-    if (s_config.opt_enum<Slic3r::ArcFittingType>("arc_fitting") != Slic3r::ArcFittingType::Disabled) {
+    if (m_print_config.arc_fitting.value != Slic3r::ArcFittingType::Disabled) {
         errors.push_back(Aion::Error(Aion::ErrorClass::Info, "Arc fitting is not supported and is ignored."));
     }
-    if (s_config.opt_enum<Slic3r::ScarfSeamPlacement>("scarf_seam_placement") != Slic3r::ScarfSeamPlacement::nowhere) {
+    if (m_print_config.scarf_seam_placement.value != Slic3r::ScarfSeamPlacement::nowhere) {
         errors.push_back(Aion::Error(Aion::ErrorClass::Info, "Scarf seams are not supported, a normal seam is placed instead."));
     }
-    if (s_config.opt_bool("only_retract_when_crossing_perimeters")) {
+    if (m_print_config.only_retract_when_crossing_perimeters.value) {
         errors.push_back(Aion::Error(Aion::ErrorClass::Info, "\"Only retract when crossing perimeters\" is not supported and is ignored."));
     }
 
@@ -857,7 +863,7 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
         }
     });
     Slic3r::Seams::Placer seam_placer;
-    const bool use_seam_placer = !s_print.config().spiral_vase.value;
+    const bool use_seam_placer = !m_print_config.spiral_vase.value;
     // slice the print
     try {
         s_print.process();
@@ -877,14 +883,14 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
 
     // Create a tool ordering for the print (needed also with one tool)
     const Slic3r::ToolOrdering s_tool_ordering(s_print, 0, false);
-    const double nozzle_diameter = s_print.config().nozzle_diameter.get_at(0);
+    const double nozzle_diameter = m_print_config.nozzle_diameter.get_at(0);
     // get the seam gap parameters
-    const Slic3r::FloatOrPercent s_seam_gap_override = s_print.config().filament_seam_gap_distance.get_at(0);
-    const double seam_gap = std::isnan(s_seam_gap_override.value) ? s_print.config().seam_gap_distance.get_abs_value(nozzle_diameter) : s_seam_gap_override.get_abs_value(nozzle_diameter);
+    const Slic3r::FloatOrPercent s_seam_gap_override = m_print_config.filament_seam_gap_distance.get_at(0);
+    const double seam_gap = std::isnan(s_seam_gap_override.value) ? m_print_config.seam_gap_distance.get_abs_value(nozzle_diameter) : s_seam_gap_override.get_abs_value(nozzle_diameter);
     // create the path smoothing function for the extrusion ordering
     const Slic3r::GCode::ExtrusionOrder::PathSmoothingFunction s_smooth_path = SlicerPathSmoothing{
         use_seam_placer ? &seam_placer : nullptr,
-        Slic3r::scaled<double>(s_print.config().gcode_resolution.value),
+        Slic3r::scaled<double>(m_print_config.gcode_resolution.value),
         use_seam_placer ? Slic3r::scaled<double>(seam_gap) : 0.0
     };
     // end point of the last extrusion
@@ -933,10 +939,10 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
 
             // check if a skirt is needed on this layer
             std::map<unsigned int, std::pair<size_t, size_t>> s_skirt_loops;
-            if (s_print.has_skirt() && 
-                !s_print.skirt().empty() && 
-                s_layer_tools.has_skirt && 
-                (skirt_layers_done < size_t(s_print.config().skirt_height.value) || s_print.has_infinite_skirt())) {
+            if (s_print.has_skirt() &&
+                !s_print.skirt().empty() &&
+                s_layer_tools.has_skirt &&
+                (skirt_layers_done < size_t(m_print_config.skirt_height.value) || s_print.has_infinite_skirt())) {
                 s_skirt_loops[s_layer_tools.extruders.front()] = { 0, s_print.skirt().entities.size() };
                 ++skirt_layers_done;
             }
@@ -949,7 +955,7 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
             brim_done = true;
 
             // process the extrusions in print order and generate the toolpath points
-            processSortedExtrusions(s_extrusions, s_layer_to_print, tool_config, to_scene, dir, s_print.config(), last_pos);
+            processSortedExtrusions(s_extrusions, s_layer_to_print, tool_config, to_scene, dir, last_pos);
         }
     }
 

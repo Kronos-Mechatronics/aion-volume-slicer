@@ -75,10 +75,9 @@ private:
 	// @param tool_config: pointer to the tool config to use for the extrusion
 	// @param transform: transformation to apply to the points
 	// @param dir: direction vector to apply to the points
-	// @param s_print_config: config of the sliced print
 	// @param layer_change[in,out]: true if this is the first path of a layer, set to false when the path was added
 	// @param last_pos[out]: updated to the last point of the path in print coordinates
-	void processSmoothPath(const Slic3r::GCode::SmoothPath& s_path, double path_z, bool is_small_perimeter, bool is_first_layer, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, const Slic3r::PrintConfig& s_print_config, bool& layer_change, std::optional<Slic3r::Point>& last_pos);
+	void processSmoothPath(const Slic3r::GCode::SmoothPath& s_path, double path_z, bool is_small_perimeter, bool is_first_layer, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, bool& layer_change, std::optional<Slic3r::Point>& last_pos);
 
 	// Convert the sorted extrusions of one layer (from Slic3r::GCode::ExtrusionOrder::get_extrusions) into ToolpathPaths
     // Order: skirt, brim, support, then the islands of the object layer and ironing.
@@ -87,9 +86,8 @@ private:
 	// @param tool_config: pointer to the tool config to use for the extrusion
 	// @param transform: transformation to apply to the points
 	// @param dir: direction vector to apply to the points
-	// @param s_print_config: config of the sliced print
 	// @param last_pos[out]: updated to the last point of the layer in print coordinates
-	void processSortedExtrusions(const std::vector<Slic3r::GCode::ExtrusionOrder::ExtruderExtrusions>& s_extrusions, const Slic3r::GCode::ObjectLayerToPrint& s_layer_to_print, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, const Slic3r::PrintConfig& s_print_config, std::optional<Slic3r::Point>& last_pos);
+	void processSortedExtrusions(const std::vector<Slic3r::GCode::ExtrusionOrder::ExtruderExtrusions>& s_extrusions, const Slic3r::GCode::ObjectLayerToPrint& s_layer_to_print, const Aion::ToolConfig* tool_config, const ON_Xform& transform, const ON_3dVector& dir, std::optional<Slic3r::Point>& last_pos);
 
 private:
 	// Components of the volume structure object in the Rhino scene
@@ -138,6 +136,9 @@ private:
 	Aion::ConfigOptionFloat* m_travel_z_hop;
 	// Additional PrusaSlicer options in .ini format, applied last
 	Aion::ConfigOptionString* m_slicer_options;
+	// Typed copy of the slicer config of the last generateToolpath call.
+	// FullPrintConfig instead of PrintConfig, because region options like ironing_speed are not part of PrintConfig.
+	Slic3r::FullPrintConfig m_print_config;
 	// small epsilon to compare if points are equal.
     double slicerEPS = 0.0001;
 };
