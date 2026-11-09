@@ -94,7 +94,17 @@ CamSlicer::CamSlicer(const ON_UUID& plugin_uuid)
     m_orientation_vector->label = "Orientation vector";
     m_orientation_vector->tooltip = "Slicing direction (build direction) of the volumes";
     m_orientation_vector->unit = "";
-    m_orientation_vector->digits = 3;
+    m_orientation_vector->digits = 4;
+
+    // Get the machine orientation vector from the machine config, if available. Otherwise, use the default Z axis.
+    const Aion::DrawingConfig* drawing_config = getConfig();
+    if (drawing_config) {
+        ON_Xform workpiece_plane = drawing_config->machineConfig().getWorkpiecePlaneTransform();
+        if (workpiece_plane.IsValid()) {
+            ON_3dVector orientation_vector = workpiece_plane * ON_3dVector::ZAxis;
+            m_orientation_vector->setPoint(orientation_vector.x, orientation_vector.y, orientation_vector.z);
+        }
+    }
 
     m_tool = new Aion::ConfigOptionTool();
     this->m_options.addOption("tool", m_tool);
