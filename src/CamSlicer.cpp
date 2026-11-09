@@ -730,7 +730,9 @@ void CamSlicer::processSortedExtrusions(const std::vector<Slic3r::GCode::Extrusi
                 // ironing after all islands of the slice
                 for (const Slic3r::GCode::ExtrusionOrder::InfillRange& s_range : s_slice.ironing_extrusions) {
                     for (const Slic3r::GCode::SmoothPath& s_path : s_range.items) {
-                        processSmoothPath(s_path, layer_z, false, layer_z < slicerEPS, tool_config, transform, dir, layer_change, last_pos);
+                        // calculate the ironing z position.
+                        const double ironing_z = s_path.empty() ? layer_z : s_layer_to_print.layer()->print_z - s_path.front().path_attributes.height;
+                        processSmoothPath(s_path, ironing_z, false, layer_z < slicerEPS, tool_config, transform, dir, layer_change, last_pos);
                     }
                 }
             }
