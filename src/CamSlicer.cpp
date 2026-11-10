@@ -4,6 +4,7 @@
 #include "InteractiveSelection.h"
 #include "Geometry5X.h"
 #include <format.hpp>
+#include <boost/property_tree/ini_parser.hpp>
 
 // Baseline PrusaSlicer config, shipped next to the plugin .rhp
 static const wchar_t* BASELINE_CONFIG_FILENAME = L"Aion_prusa_config.ini";
@@ -467,7 +468,26 @@ bool CamSlicer::loadSlicerConfig(Slic3r::DynamicPrintConfig& s_config, Aion::Err
     // user defined options overwrite everything else
     if (!m_slicer_options->getString().empty()) {
         try {
-            s_config.load_from_ini_string(m_slicer_options->getString(), Slic3r::ForwardCompatibilitySubstitutionRule::EnableSilent);
+            boost::property_tree::ptree tree;
+            std::istringstream iss(m_slicer_options->getString());
+            boost::property_tree::read_ini(iss, tree);
+            // load() silently ignores keys that handle_legacy clears (unknown or obsolete keys)
+            std::string unknown_keys;
+            for (const boost::property_tree::ptree::value_type& v : tree) {
+                std::string key = v.first;
+                std::string value = v.second.data();
+                Slic3r::PrintConfigDef::handle_legacy(key, value);
+                if (key.empty()) {
+                    // append the unkown keys
+                    unknown_keys += (unknown_keys.empty() ? "" : ", ") + v.first;
+                }
+            }
+            if (!unknown_keys.empty()) {
+                errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Unknown or obsolete slicer options in configuration options: " + unknown_keys));
+                return false;
+            }
+            // Disable throws on invalid values instead of silently substituting them
+            s_config.load(tree, Slic3r::ForwardCompatibilitySubstitutionRule::Disable);
         }
         catch (const std::exception& exc) {
             errors.push_back(Aion::Error(Aion::ErrorClass::Warning, std::string("Could not parse configuration options: ") + exc.what()));
