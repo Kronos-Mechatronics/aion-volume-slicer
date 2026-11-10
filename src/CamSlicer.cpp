@@ -929,6 +929,8 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
     Slic3r::Model s_model;
     Slic3r::Print s_print;
     Slic3r::ModelObject* s_mo_ptr = s_model.add_object();
+    // generic name for PrusaSlicer messages
+    s_mo_ptr->name = "\"Slicer volume\"";
     s_mo_ptr->add_instance();
     // Get create the slicer config from the initial config and the options of this cam block
     Slic3r::DynamicPrintConfig s_config;
@@ -1092,6 +1094,9 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
         if (Aion::ToolpathPath* const last_path = dynamic_cast<Aion::ToolpathPath*>(m_toolpaths.back().get())) {
             this->generateWiping(last_path, false);
         }
+    }
+    else {
+        errors.push_back(Aion::Error(Aion::ErrorClass::Info, "No extrusions generated, the object may be too small for the extrusion width / layer height."));
     }
 
     return true;
