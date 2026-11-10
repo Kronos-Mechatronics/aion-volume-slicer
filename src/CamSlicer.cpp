@@ -84,8 +84,7 @@ static const std::vector<std::pair<const char*, std::vector<const char*>>> UNSUP
     {"are ignored, set retract_before_travel and retract_layer_change instead", {
         "filament_retract_before_travel", "filament_retract_layer_change",
     }},
-    {"are ignored, cooling is not supported (layers are not slowed down, no fan commands)", {
-        "cooling", "slowdown_below_layer_time", "min_print_speed", "cooling_slowdown_logic", "cooling_perimeter_transition_distance",
+    {"are ignored, there are no fan commands", {
         "fan_always_on", "fan_below_layer_time", "min_fan_speed", "max_fan_speed", "bridge_fan_speed", "disable_fan_first_layers",
         "full_fan_speed_layer", "enable_dynamic_fan_speeds",
     }},
@@ -118,6 +117,7 @@ static const std::vector<std::pair<const char*, std::vector<const char*>>> UNSUP
     }},
     {"are not supported and are ignored", {
         "arc_fitting", "only_retract_when_crossing_perimeters", "avoid_crossing_perimeters", "avoid_crossing_curled_overhangs",
+        "cooling_slowdown_logic", "cooling_perimeter_transition_distance",
     }},
     {"are not supported, a normal seam is placed at the start of the scarf instead", {
         "scarf_seam_placement",
@@ -748,6 +748,8 @@ void CamSlicer::processSortedExtrusions(const std::vector<Slic3r::GCode::Extrusi
     const double support_z = s_layer_to_print.support_layer ? s_layer_to_print.support_layer->bottom_z() : layer_z;
     // the travel to the first path of this layer is a layer change
     bool layer_change = true;
+    // first toolpath of this layer, for the slowdown to the minimum layer time
+    const size_t layer_begin = m_toolpaths.size();
 
     // this should always be one loop because there is only one tool.
     for (const Slic3r::GCode::ExtrusionOrder::ExtruderExtrusions& s_extruder : s_extrusions) {
@@ -801,6 +803,55 @@ void CamSlicer::processSortedExtrusions(const std::vector<Slic3r::GCode::Extrusi
                     }
                 }
             }
+        }
+    }
+
+    // check if cooling is enabled and slowdown_below_layer_time is set, otherwise skip the slowdown
+    const double min_layer_time = m_print_config.slowdown_below_layer_time.get_at(0);
+    if (!m_print_config.cooling.get_at(0) || min_layer_time <= 0.0) {
+        return;
+    }
+
+    // calculate the fixed (travels) and adjustable (extrusions) time of the layer
+    double fixed_time = 0.0;
+    double adjustable_time = 0.0;
+    for (size_t i = layer_begin; i < m_toolpaths.size(); ++i) {
+        const Aion::ToolpathEntity* const entity = m_toolpaths[i].get();
+        const bool is_path = dynamic_cast<const Aion::ToolpathPath*>(entity) != nullptr;
+        const Aion::ToolpathElements* const points = entity->getToolpathPoints();
+        for (size_t j = 1; j < points->size(); ++j) {
+            const double speed = (*points)[j].getSpeed() > 0.0 ? (*points)[j].getSpeed() : entity->speed;
+            if (speed <= 0.0) {
+                continue;
+            }
+            const double time = (*points)[j - 1].getPoint().DistanceTo((*points)[j].getPoint()) / speed;
+            if (is_path) {
+                adjustable_time += time;
+            }
+            else {
+                fixed_time += time;
+            }
+        }
+    }
+    // skip if there is no slow down needed or not possible
+    if (adjustable_time <= 0.0 || fixed_time + adjustable_time >= min_layer_time || min_layer_time - fixed_time <= 0.0) {
+        return;
+    }
+    // Adjust the speed to not exceed the minimum layer time
+    const double factor = adjustable_time / (min_layer_time - fixed_time);
+    const double min_speed = m_print_config.min_print_speed.get_at(0);
+    for (size_t i = layer_begin; i < m_toolpaths.size(); ++i) {
+        if (dynamic_cast<const Aion::ToolpathPath*>(m_toolpaths[i].get()) == nullptr) {
+            continue;
+        }
+        for (Aion::ToolpathElement& point : *m_toolpaths[i]->getToolpathPoints()) {
+            const double speed = point.getSpeed();
+            double new_speed = speed * factor;
+            // limit the speed to min_speed
+            if (new_speed < min_speed) {
+                new_speed = std::min(speed, min_speed);
+            }
+            point.setSpeed(new_speed);
         }
     }
 }
