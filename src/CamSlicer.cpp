@@ -1196,7 +1196,7 @@ void CamSlicer::onOptionChanged(const Aion::ConfigOptionBase* option, bool reset
             updateToolPresets(tool_config, last_tool_config, force_update, m_height, m_width, m_speed, nullptr);
 
             if (update_first_layer) {
-                *m_first_layer_height = tool_config->tool_height();
+                *m_first_layer_height = tool_config->tool_height().getFloat();
             }
         }
 
