@@ -57,6 +57,22 @@ inline const std::map<std::string, int>& GetPerimeterGeneratorStringMap() {
     return map;
 }
 
+enum SupportMode : unsigned char {
+    supportNone,
+    supportBottomOnly,
+    supportEverywhere
+};
+
+// Helper function instead of static data to avoid delay-load issues from Aion-5X.rhp
+inline const std::map<std::string, int>& GetSupportModeStringMap() {
+    static const std::map<std::string, int> map{
+        {"None", supportNone},
+        {"Bottom only", supportBottomOnly},
+        {"Everywhere", supportEverywhere}
+    };
+    return map;
+}
+
 // PrusaSlicer extrusion width keys, all set to the width of the CAM block
 static const std::vector<const char*> EXTRUSION_WIDTH_KEYS{
     "extrusion_width",
@@ -354,10 +370,10 @@ CamSlicer::CamSlicer(const ON_UUID& plugin_uuid)
     m_infill_pattern->detail_level = Aion::ConfigDetailLevel::levelTwo;
 
     // Other
-    m_support = new Aion::ConfigOptionBool(false);
-    this->m_options.addOption("support", m_support);
+    m_support = new Aion::ConfigOptionEnum(SupportMode::supportNone, &GetSupportModeStringMap());
+    this->m_options.addOption("supportMode", m_support);
     m_support->label = "Support";
-    m_support->tooltip = "Generate supports for this CAM-Block.\nOnly use for structures on the printbed.";
+    m_support->tooltip = "Generate supports for this CAM-Block.\nNone: no supports\nBottom only: only supports that start on the printbed\nEverywhere: supports may also start on the structure itself\nOnly use for structures on the printbed.";
 
     m_brim_width = new Aion::ConfigOptionFloat(0.0);
     this->m_options.addOption("brimWidth", m_brim_width);
@@ -410,7 +426,9 @@ void CamSlicer::applyConfigOptionsToSlicerConfig(Slic3r::DynamicPrintConfig& s_c
         { "bottom_solid_layers", m_bottom_layers->getInt() },
         { "fill_density", m_infill_density->serialize() },
         { "fill_pattern", INFILL_PATTERNS.at(m_infill_pattern->getInt()).second },
-        { "support_material", m_support->getBool() },
+        { "support_material", m_support->getInt() != SupportMode::supportNone },
+        { "support_material_auto", true },
+        { "support_material_buildplate_only", m_support->getInt() == SupportMode::supportBottomOnly },
         { "brim_width", m_brim_width->getFloat() },
         { "spiral_vase", m_vase_mode->getBool() },
     });

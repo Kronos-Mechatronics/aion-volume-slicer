@@ -130,7 +130,7 @@ private:
 	Aion::ConfigOptionEnum* m_infill_pattern;
 
 	// Other
-	Aion::ConfigOptionBool* m_support;
+	Aion::ConfigOptionEnum* m_support;
 	Aion::ConfigOptionFloat* m_brim_width;
 	// Lift of the travel moves between the slicer paths, -1 to let Aion insert its global travel moves
 	Aion::ConfigOptionFloat* m_travel_z_hop;
