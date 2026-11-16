@@ -123,7 +123,6 @@ private:
 	// Filling options
 	Aion::ConfigOptionInt* m_perimeters;
 	Aion::ConfigOptionEnum* m_perimeter_generator;
-	Aion::ConfigOptionBool* m_vase_mode;
 	Aion::ConfigOptionInt* m_top_layers;
 	Aion::ConfigOptionInt* m_bottom_layers;
 	Aion::ConfigOptionPercent* m_infill_density;

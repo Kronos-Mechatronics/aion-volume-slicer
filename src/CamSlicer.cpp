@@ -141,11 +141,11 @@ static const std::vector<std::pair<const char*, std::vector<const char*>>> UNSUP
     }},
 };
 
-// PrusaSlicer options that prefill the "Configuration options" field, grouped by the comment line above them.
+// PrusaSlicer options that prefill the "Advanced options" field, grouped by the comment line above them.
 // Not listed: options from applyConfigOptionsToSlicerConfig, the speeds, UNSUPPORTED_OPTIONS and the options without effect for single tool machines
 static const std::vector<std::pair<const char*, std::vector<const char*>>> SLICER_OPTION_GROUPS{
     {"Layers and perimeters", {
-        "top_solid_min_thickness", "bottom_solid_min_thickness", "extra_perimeters", "extra_perimeters_on_overhangs",
+        "spiral_vase", "top_solid_min_thickness", "bottom_solid_min_thickness", "extra_perimeters", "extra_perimeters_on_overhangs",
         "ensure_vertical_shell_thickness", "thin_walls", "thick_bridges", "overhangs", "top_one_perimeter_type",
         "only_one_perimeter_first_layer", "external_perimeters_first", "gap_fill_enabled", "seam_position",
         "staggered_inner_seams", "seam_gap_distance", "prefer_clockwise_movements",
@@ -229,7 +229,7 @@ static void _loadBaselineSlicerConfig(Slic3r::DynamicPrintConfig& s_config, Aion
     }
 }
 
-// Default text of the "Configuration options" field: the options of SLICER_OPTION_GROUPS with their values from PrusaSlicer defaults overlaid with the baseline config. Enums get their possible values as a comment.
+// Default text of the "Advanced options" field: the options of SLICER_OPTION_GROUPS with their values from PrusaSlicer defaults overlaid with the baseline config. Enums get their possible values as a comment.
 static const std::string& getDefaultSlicerOptions()
 {
     // created as a static variable to avoid repeatedly loading the baseline config and creating the text on every call
@@ -279,7 +279,7 @@ CamSlicer::CamSlicer(const ON_UUID& plugin_uuid)
 
     m_orientation_vector = new Aion::ConfigOptionDirection(ON_3dVector::ZAxis);
     this->m_options.addOption("orientationVector", m_orientation_vector);
-    m_orientation_vector->label = "Orientation vector";
+    m_orientation_vector->label = "Print orientation";
     m_orientation_vector->tooltip = "Slicing direction (build direction) of the volumes";
     m_orientation_vector->unit = "";
     m_orientation_vector->digits = 4;
@@ -308,7 +308,7 @@ CamSlicer::CamSlicer(const ON_UUID& plugin_uuid)
     // Extrusion parameters
     m_width = new Aion::ConfigOptionFloat(0.4);
     this->m_options.addOption("width", m_width);
-    m_width->label = "Width";
+    m_width->label = "Line width";
     m_width->tooltip = "Extrusion width";
     m_width->unit = "mm";
     m_width->min = 0.0;
@@ -316,7 +316,7 @@ CamSlicer::CamSlicer(const ON_UUID& plugin_uuid)
 
     m_height = new Aion::ConfigOptionFloat(0.2);
     this->m_options.addOption("height", m_height);
-    m_height->label = "Height";
+    m_height->label = "Layer height";
     m_height->tooltip = "Layer height";
     m_height->unit = "mm";
     m_height->min = 0.0;
@@ -454,11 +454,6 @@ CamSlicer::CamSlicer(const ON_UUID& plugin_uuid)
     m_perimeter_generator->tooltip = "Arachne: variable extrusion width to fill thin walls and gaps\nClassic: constant extrusion width";
     m_perimeter_generator->detail_level = Aion::ConfigDetailLevel::levelTwo;
 
-    m_vase_mode = new Aion::ConfigOptionBool(false);
-    this->m_options.addOption("vaseMode", m_vase_mode);
-    m_vase_mode->label = "Vase mode";
-    m_vase_mode->tooltip = "Print only a single perimeter without top layers, infill and supports";
-    m_vase_mode->detail_level = Aion::ConfigDetailLevel::levelTwo;
 
     m_top_layers = new Aion::ConfigOptionInt(5);
     this->m_options.addOption("topLayers", m_top_layers);
@@ -476,7 +471,7 @@ CamSlicer::CamSlicer(const ON_UUID& plugin_uuid)
 
     m_infill_density = new Aion::ConfigOptionPercent(15.0);
     this->m_options.addOption("infillDensity", m_infill_density);
-    m_infill_density->label = "Infill";
+    m_infill_density->label = "Infill density";
     m_infill_density->tooltip = "Density of the sparse infill";
     m_infill_density->increment = 5.0;
 
@@ -510,7 +505,7 @@ CamSlicer::CamSlicer(const ON_UUID& plugin_uuid)
 
     m_slicer_options = new Aion::ConfigOptionString(getDefaultSlicerOptions());
     this->m_options.addOption("slicerOptions", m_slicer_options);
-    m_slicer_options->label = "Configuration options";
+    m_slicer_options->label = "Advanced options";
     m_slicer_options->tooltip = "PrusaSlicer options in \".ini\" format (one \"key = value\" per line), \"#\" starts a comment.\nThey are applied last and overwrite all other settings.\nThe comment after a text value lists its possible values.";
     m_slicer_options->multiline = true;
     m_slicer_options->detail_level = Aion::ConfigDetailLevel::levelTwo;
@@ -547,18 +542,7 @@ void CamSlicer::applyConfigOptionsToSlicerConfig(Slic3r::DynamicPrintConfig& s_c
         { "support_material_auto", true },
         { "support_material_buildplate_only", m_support->getInt() == SupportMode::supportBottomOnly },
         { "brim_width", m_brim_width->getFloat() },
-        { "spiral_vase", m_vase_mode->getBool() },
     });
-
-    if (m_vase_mode->getBool()) {
-        // same overrides as PrusaSlicer applies for spiral vase mode
-        s_config.set_deserialize_strict({
-            { "perimeters", 1 },
-            { "top_solid_layers", 0 },
-            { "fill_density", "0%" },
-            { "support_material", false },
-        });
-    }
 }
 
 bool CamSlicer::loadSlicerConfig(Slic3r::DynamicPrintConfig& s_config, Aion::Errorlist& errors)
@@ -592,16 +576,27 @@ bool CamSlicer::loadSlicerConfig(Slic3r::DynamicPrintConfig& s_config, Aion::Err
                 }
             }
             if (!unknown_keys.empty()) {
-                errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Unknown or obsolete slicer options in configuration options: " + unknown_keys));
+                errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Unknown or obsolete slicer options in advanced options: " + unknown_keys));
                 return false;
             }
             // Disable throws on invalid values instead of silently substituting them
             s_config.load(tree, Slic3r::ForwardCompatibilitySubstitutionRule::Disable);
         }
         catch (const std::exception& exc) {
-            errors.push_back(Aion::Error(Aion::ErrorClass::Warning, std::string("Could not parse configuration options: ") + exc.what()));
+            errors.push_back(Aion::Error(Aion::ErrorClass::Warning, std::string("Could not parse advanced options: ") + exc.what()));
             return false;
         }
+    }
+
+    // spiral_vase is set in the advanced options, so its overrides come last.
+    // Same overrides as PrusaSlicer's GUI applies for spiral vase mode.
+    if (s_config.opt_bool("spiral_vase")) {
+        s_config.set_deserialize_strict({
+            { "perimeters", 1 },
+            { "top_solid_layers", 0 },
+            { "fill_density", "0%" },
+            { "support_material", false },
+        });
     }
     return true;
 }
@@ -1084,7 +1079,7 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
     if (!loadSlicerConfig(s_config, errors)) {
         return false;
     }
-    // reject invalid values, e.g. from the user configuration options
+    // reject invalid values, e.g. from the advanced options
     if (const std::string config_error = s_config.validate(); !config_error.empty()) {
         errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Invalid slicer configuration: " + config_error));
         return false;
@@ -1289,7 +1284,6 @@ Aion::OptionsGroups CamSlicer::getOptionsByGroup()
         group_filling.name = "Filling options";
         group_filling.options.push_back(m_perimeters);
         group_filling.options.push_back(m_perimeter_generator);
-        group_filling.options.push_back(m_vase_mode);
         group_filling.options.push_back(m_top_layers);
         group_filling.options.push_back(m_bottom_layers);
         group_filling.options.push_back(m_infill_density);
@@ -1297,7 +1291,7 @@ Aion::OptionsGroups CamSlicer::getOptionsByGroup()
         result.push_back(group_filling);
 
         Aion::OptionsGroup group_other;
-        group_other.name = "Other";
+        group_other.name = "Advanced";
         group_other.options.push_back(m_support);
         group_other.options.push_back(m_brim_width);
         group_other.options.push_back(m_travel_z_hop);
