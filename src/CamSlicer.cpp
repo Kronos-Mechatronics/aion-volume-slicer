@@ -141,6 +141,62 @@ static const std::vector<std::pair<const char*, std::vector<const char*>>> UNSUP
     }},
 };
 
+// PrusaSlicer options that prefill the "Configuration options" field, grouped by the comment line above them.
+// Not listed: options from applyConfigOptionsToSlicerConfig, the speeds, UNSUPPORTED_OPTIONS and the options without effect for single tool machines
+static const std::vector<std::pair<const char*, std::vector<const char*>>> SLICER_OPTION_GROUPS{
+    {"Layers and perimeters", {
+        "top_solid_min_thickness", "bottom_solid_min_thickness", "extra_perimeters", "extra_perimeters_on_overhangs",
+        "ensure_vertical_shell_thickness", "thin_walls", "thick_bridges", "overhangs", "top_one_perimeter_type",
+        "only_one_perimeter_first_layer", "external_perimeters_first", "gap_fill_enabled", "seam_position",
+        "staggered_inner_seams", "seam_gap_distance", "prefer_clockwise_movements",
+    }},
+    {"Arachne perimeter generator", {
+        "wall_transition_length", "wall_transition_filter_deviation", "wall_transition_angle", "wall_distribution_count",
+        "min_feature_size", "min_bead_width",
+    }},
+    {"Fuzzy skin", {
+        "fuzzy_skin", "fuzzy_skin_thickness", "fuzzy_skin_point_dist",
+    }},
+    {"Infill", {
+        "top_fill_pattern", "bottom_fill_pattern", "fill_angle", "bridge_angle", "infill_anchor", "infill_anchor_max",
+        "infill_overlap", "infill_every_layers", "automatic_infill_combination", "automatic_infill_combination_max_layer_height",
+        "solid_infill_every_layers", "solid_infill_below_area", "infill_first",
+    }},
+    {"Ironing", {
+        "ironing", "ironing_type", "ironing_flowrate", "ironing_spacing", "ironing_speed",
+    }},
+    {"Skirt and brim", {
+        "skirts", "skirt_distance", "skirt_height", "draft_shield", "min_skirt_length", "brim_type", "brim_separation",
+    }},
+    {"Support material", {
+        "support_material_style", "support_material_threshold", "support_material_enforce_layers", "dont_support_bridges",
+        "support_material_contact_distance", "support_material_bottom_contact_distance", "support_material_pattern",
+        "support_material_with_sheath", "support_material_spacing", "support_material_angle", "support_material_closing_radius",
+        "support_material_xy_spacing", "support_material_interface_layers", "support_material_bottom_interface_layers",
+        "support_material_interface_pattern", "support_material_interface_spacing", "support_material_interface_contact_loops",
+        "support_material_synchronize_layers", "min_layer_height", "max_layer_height",
+    }},
+    {"Organic support", {
+        "support_tree_angle", "support_tree_angle_slow", "support_tree_branch_diameter", "support_tree_branch_diameter_angle",
+        "support_tree_branch_diameter_double_wall", "support_tree_tip_diameter", "support_tree_branch_distance",
+        "support_tree_top_rate",
+    }},
+    {"Raft", {
+        "raft_layers", "raft_contact_distance", "raft_expansion", "raft_first_layer_density", "raft_first_layer_expansion",
+    }},
+    {"Slicing", {
+        "slice_closing_radius", "slicing_mode", "resolution", "gcode_resolution", "xy_size_compensation",
+        "elefant_foot_compensation", "bridge_flow_ratio", "interface_shells", "filament_shrinkage_compensation_xy",
+        "filament_shrinkage_compensation_z",
+    }},
+    {"Minimum layer time", {
+        "cooling", "slowdown_below_layer_time", "min_print_speed",
+    }},
+    {"Retraction of the tool", {
+        "retract_before_travel", "retract_layer_change",
+    }},
+};
+
 // Directory of this plugin's .rhp file
 static std::filesystem::path getPluginDirectory()
 {
@@ -150,6 +206,66 @@ static std::filesystem::path getPluginDirectory()
     wchar_t buffer[MAX_PATH];
     GetModuleFileNameW(module, buffer, MAX_PATH);
     return std::filesystem::path(buffer).parent_path();
+}
+
+// Load the PrusaSlicer defaults, overlaid with the baseline config shipped next to the plugin.
+// @param s_config[out]: the loaded slicer config, only the PrusaSlicer defaults if the baseline config is missing or invalid
+// @param errors[out]: an info if the baseline config is missing, a warning if it can't be read
+static void _loadBaselineSlicerConfig(Slic3r::DynamicPrintConfig& s_config, Aion::Errorlist& errors)
+{
+    s_config = Slic3r::DynamicPrintConfig::full_print_config();
+    const std::filesystem::path baseline_path = getPluginDirectory() / BASELINE_CONFIG_FILENAME;
+    if (std::filesystem::exists(baseline_path)) {
+        try {
+            s_config.load_from_ini(baseline_path.u8string(), Slic3r::ForwardCompatibilitySubstitutionRule::EnableSilent);
+        }
+        catch (const std::exception& exc) {
+            s_config = Slic3r::DynamicPrintConfig::full_print_config();
+            errors.push_back(Aion::Error(Aion::ErrorClass::Warning, std::string("Could not read baseline slicer config, PrusaSlicer defaults are used: ") + exc.what()));
+        }
+    }
+    else {
+        errors.push_back(Aion::Error(Aion::ErrorClass::Info, "Baseline slicer config not found, PrusaSlicer defaults are used."));
+    }
+}
+
+// Default text of the "Configuration options" field: the options of SLICER_OPTION_GROUPS with their values from PrusaSlicer defaults overlaid with the baseline config. Enums get their possible values as a comment.
+static const std::string& getDefaultSlicerOptions()
+{
+    // created as a static variable to avoid repeatedly loading the baseline config and creating the text on every call
+    static const std::string text = [] {
+        Slic3r::DynamicPrintConfig s_config;
+        Aion::Errorlist errors;
+        _loadBaselineSlicerConfig(s_config, errors);
+
+        std::string result;
+        for (const auto& [group, keys] : SLICER_OPTION_GROUPS) {
+            // blank line between the groups
+            if (!result.empty()) {
+                result += "\n\n";
+            }
+            result += std::string("# ") + group;
+            for (const char* key : keys) {
+                const Slic3r::ConfigOption* s_option = s_config.option(key);
+                const Slic3r::ConfigOptionDef* s_def = Slic3r::print_config_def.get(key);
+                // only if a key was removed in a newer PrusaSlicer version
+                if (!s_option || !s_def) {
+                    continue;
+                }
+                result += "\n" + std::string(key) + " = " + s_option->serialize();
+                // only closed enums, the numerical options with an enum_def only have GUI presets as values
+                if (s_def->type == Slic3r::coEnum && s_def->enum_def) {
+                    std::string values;
+                    for (const std::string& value : s_def->enum_def->values()) {
+                        values += (values.empty() ? "" : ", ") + value;
+                    }
+                    result += " # " + values;
+                }
+            }
+        }
+        return result;
+    }();
+    return text;
 }
 
 CamSlicer::CamSlicer(const ON_UUID& plugin_uuid)
@@ -392,10 +508,10 @@ CamSlicer::CamSlicer(const ON_UUID& plugin_uuid)
     m_travel_z_hop->min = -1.0;
     m_travel_z_hop->detail_level = Aion::ConfigDetailLevel::levelTwo;
 
-    m_slicer_options = new Aion::ConfigOptionString();
+    m_slicer_options = new Aion::ConfigOptionString(getDefaultSlicerOptions());
     this->m_options.addOption("slicerOptions", m_slicer_options);
     m_slicer_options->label = "Configuration options";
-    m_slicer_options->tooltip = "Additional PrusaSlicer options in \".ini\" format (one \"key = value\" per line).\nThey are applied last and overwrite all other settings.\nExample:\nseam_position = rear\nfill_angle = 30\nironing = 1";
+    m_slicer_options->tooltip = "PrusaSlicer options in \".ini\" format (one \"key = value\" per line), \"#\" starts a comment.\nThey are applied last and overwrite all other settings.\nThe comment after a text value lists its possible values.";
     m_slicer_options->multiline = true;
     m_slicer_options->detail_level = Aion::ConfigDetailLevel::levelTwo;
 }
@@ -448,28 +564,21 @@ void CamSlicer::applyConfigOptionsToSlicerConfig(Slic3r::DynamicPrintConfig& s_c
 bool CamSlicer::loadSlicerConfig(Slic3r::DynamicPrintConfig& s_config, Aion::Errorlist& errors)
 {
     // PrusaSlicer defaults, overlaid with the shipped baseline config
-    s_config = Slic3r::DynamicPrintConfig::full_print_config();
-    const std::filesystem::path baseline_path = getPluginDirectory() / BASELINE_CONFIG_FILENAME;
-    if (std::filesystem::exists(baseline_path)) {
-        try {
-            s_config.load_from_ini(baseline_path.u8string(), Slic3r::ForwardCompatibilitySubstitutionRule::EnableSilent);
-        }
-        catch (const std::exception& exc) {
-            s_config = Slic3r::DynamicPrintConfig::full_print_config();
-            errors.push_back(Aion::Error(Aion::ErrorClass::Warning, std::string("Could not read baseline slicer config, PrusaSlicer defaults are used: ") + exc.what()));
-        }
-    }
-    else {
-        errors.push_back(Aion::Error(Aion::ErrorClass::Info, "Baseline slicer config not found, PrusaSlicer defaults are used."));
-    }
+    _loadBaselineSlicerConfig(s_config, errors);
 
     applyConfigOptionsToSlicerConfig(s_config);
 
     // user defined options overwrite everything else
     if (!m_slicer_options->getString().empty()) {
         try {
+            // read the ini file
+            std::istringstream lines(m_slicer_options->getString());
+            std::string ini;
+            for (std::string line; std::getline(lines, line);) {
+                ini += line.substr(0, line.find('#')) + "\n";
+            }
             boost::property_tree::ptree tree;
-            std::istringstream iss(m_slicer_options->getString());
+            std::istringstream iss(ini);
             boost::property_tree::read_ini(iss, tree);
             // load() silently ignores keys that handle_legacy clears (unknown or obsolete keys)
             std::string unknown_keys;
