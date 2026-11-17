@@ -576,14 +576,14 @@ bool CamSlicer::loadSlicerConfig(Slic3r::DynamicPrintConfig& s_config, Aion::Err
                 }
             }
             if (!unknown_keys.empty()) {
-                errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Unknown or obsolete slicer options in advanced options: " + unknown_keys));
+                errors.push_back(Aion::Error(Aion::ErrorClass::Critical, "Unknown or obsolete slicer options in advanced options: " + unknown_keys));
                 return false;
             }
             // Disable throws on invalid values instead of silently substituting them
             s_config.load(tree, Slic3r::ForwardCompatibilitySubstitutionRule::Disable);
         }
         catch (const std::exception& exc) {
-            errors.push_back(Aion::Error(Aion::ErrorClass::Warning, std::string("Could not parse advanced options: ") + exc.what()));
+            errors.push_back(Aion::Error(Aion::ErrorClass::Critical, std::string("Could not parse advanced options: ") + exc.what()));
             return false;
         }
     }
@@ -619,7 +619,7 @@ bool _createSlicerMesh(const ON_Mesh& on_mesh, const ON_Xform& xform, Slic3r::Tr
         ON_3dPoint on_vert = use_double_vertices ? on_mesh.m_dV[i] : ON_3dPoint(on_mesh.m_V[i]);
         on_vert.Transform(xform);
         if (!on_vert.IsValid()) {
-            errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Slicer object has invalid mesh vertices."));
+            errors.push_back(Aion::Error(Aion::ErrorClass::Critical, "Slicer object has invalid mesh vertices."));
             return false;
         }
         s_its.vertices.emplace_back(float(on_vert.x), float(on_vert.y), float(on_vert.z));
@@ -630,7 +630,7 @@ bool _createSlicerMesh(const ON_Mesh& on_mesh, const ON_Xform& xform, Slic3r::Tr
         const ON_MeshFace& on_face = on_mesh.m_F[i];
         // out of range indices would crash in PrusaSlicer without an exception
         if (!on_face.IsValid(vertex_count)) {
-            errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Slicer object has invalid mesh faces."));
+            errors.push_back(Aion::Error(Aion::ErrorClass::Critical, "Slicer object has invalid mesh faces."));
             return false;
         }
         s_its.indices.emplace_back(on_face.vi[0], on_face.vi[1], on_face.vi[2]);
@@ -650,7 +650,7 @@ bool _createSlicerMesh(const ON_Mesh& on_mesh, const ON_Xform& xform, Slic3r::Tr
     }
     // open meshes are already reported by createNurbsMesh, only report the non-manifold edges of closed meshes
     if (!s_mesh.stats().manifold() && on_mesh.IsClosed()) {
-        errors.push_back(Aion::Error(Aion::ErrorClass::Info, "Slicer object has " + std::to_string(s_mesh.stats().open_edges) + " non-manifold edges. Slicing results may be incomplete."));
+        errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Slicer object has " + std::to_string(s_mesh.stats().open_edges) + " non-manifold edges. Slicing results may be incomplete."));
     }
     return true;
 }
@@ -1004,7 +1004,7 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
     m_toolpaths.clear();
 
     if (m_tool->getString().empty()) {
-        errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "No tool specified"));
+        errors.push_back(Aion::Error(Aion::ErrorClass::Critical, "No tool specified"));
         // No valid result, return false -> gcode export not possible
         return false;
     }
@@ -1016,7 +1016,7 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
     }
 
     if (m_speed->getFloat() <= 0.0) {
-        errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Print speed must be greater than zero."));
+        errors.push_back(Aion::Error(Aion::ErrorClass::Critical, "Print speed must be greater than zero."));
         return false;
     }
 
@@ -1029,13 +1029,13 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
     // orientation vector valid?
     ON_3dVector dir = m_orientation_vector->getVector();
     if (!dir.Unitize()) {
-        errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Orientation vector must not be zero."));
+        errors.push_back(Aion::Error(Aion::ErrorClass::Critical, "Orientation vector must not be zero."));
         return false;
     }
 
     // check height must be lower than the width, otherwise the slicer will fail
     if (m_height->getFloat() >= m_width->getFloat() || m_first_layer_height->getFloat() >= m_width->getFloat()) {
-        errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Slicing not possible: Layer height must be lower than the extrusion width."));
+        errors.push_back(Aion::Error(Aion::ErrorClass::Critical, "Slicing not possible: Layer height must be lower than the extrusion width."));
         return false;
     }
 
@@ -1083,14 +1083,14 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
     }
     // reject invalid values, e.g. from the advanced options
     if (const std::string config_error = s_config.validate(); !config_error.empty()) {
-        errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Invalid slicer configuration: " + config_error));
+        errors.push_back(Aion::Error(Aion::ErrorClass::Critical, "Invalid slicer configuration: " + config_error));
         return false;
     }
     // Apply the config to the m_print_config
     m_print_config.apply(s_config, true);
     // Aion prints with one tool, Warning if multiple tools are configured in the slicer config.
     if (m_print_config.nozzle_diameter.size() > 1) {
-        errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Slicing not possible: Multiple tools are configured, only one tool is supported."));
+        errors.push_back(Aion::Error(Aion::ErrorClass::Critical, "Slicing not possible: Multiple tools are configured, only one tool is supported."));
         return false;
     }
     // inform about options that are changed from the PrusaSlicer default, but only act in PrusaSlicer's G-code export.
@@ -1127,7 +1127,7 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
     s_print.apply(s_model, s_config);
     // Validate the print config before slicing
     if (const std::string print_error = s_print.validate(); !print_error.empty()) {
-        errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Slicing not possible: " + print_error));
+        errors.push_back(Aion::Error(Aion::ErrorClass::Critical, "Slicing not possible: " + print_error));
         return false;
     }
     // set the callback to check for user abort during slicing
@@ -1240,7 +1240,7 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
         }
     }
     else {
-        errors.push_back(Aion::Error(Aion::ErrorClass::Info, "No extrusions generated, the object may be too small for the extrusion width / layer height."));
+        errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "No extrusions generated, the object may be too small for the extrusion width / layer height."));
     }
 
     return true;
