@@ -1043,6 +1043,8 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
     std::vector<std::unique_ptr<ON_Mesh>> on_meshes;
     on_meshes.reserve(m_volume_components->getComponents()->size());
     for (const Aion::Component& comp : *m_volume_components->getComponents()) {
+        // Add component to the produced objects
+        this->addProducedObject(comp.uuid, true, Aion::ProducedObject::RenderMode::wireframe);
         std::unique_ptr<ON_Mesh> on_mesh = Aion::Geometry5X::createNurbsMesh(comp, errors, ON_MeshParameters::DefaultAnalysisMesh);
         if (on_mesh) {
             on_meshes.emplace_back(std::move(on_mesh));
