@@ -599,6 +599,17 @@ bool CamSlicer::loadSlicerConfig(Slic3r::DynamicPrintConfig& s_config, Aion::Err
             { "support_material", false },
         });
     }
+
+    // Force Rectilinear infill if the user set 100% infill density.
+    if (s_config.option<Slic3r::ConfigOptionPercent>("fill_density")->value >= 100) {
+        const int fill_pattern = s_config.option<Slic3r::ConfigOptionEnum<Slic3r::InfillPattern>>("fill_pattern")->value;
+        if (!s_config.option_def("top_fill_pattern")->enum_def->enum_to_index(fill_pattern).has_value()) {
+            const auto label = s_config.option_def("fill_pattern")->enum_def->enum_to_label(fill_pattern);
+            const std::string name = label.has_value() ? label->get() : s_config.opt_serialize("fill_pattern");
+            errors.push_back(Aion::Error(Aion::ErrorClass::Info, "The " + name + " infill pattern is not supported at 100% density, rectilinear is used instead."));
+            s_config.set_key_value("fill_pattern", new Slic3r::ConfigOptionEnum<Slic3r::InfillPattern>(Slic3r::ipRectilinear));
+        }
+    }
     return true;
 }
 
