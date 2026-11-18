@@ -1,0 +1,7 @@
+// Resource script of the plug-in. Paths are relative to this file.
+#include "../src/Resource.h"
+
+// Plug-in icon, see RHINO_PLUG_IN_ICON_RESOURCE_ID in CamSlicerPlugIn.cpp
+IDI_ICON                ICON    "CamSlicer.ico"
+// Icon of the CAM block, see CamSlicer::getIcon
+IDI_VOLUME_TOOL         ICON    "icon-volume-tool.ico"

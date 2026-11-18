@@ -31,7 +31,7 @@ public:
     // generate Toolpath of the contour CAM block
     bool generateToolpath(Aion::Errorlist& errors) override;
 	// Get the icon for the CAM block
-	// virtual HICON getIcon(int size_x, int size_y) const override;
+	virtual HICON getIcon(int size_x, int size_y) const override;
     // Expose options of this cam block to UI
     Aion::OptionsGroups getOptionsByGroup() override;
     // callback for when an option was changed in the UI.

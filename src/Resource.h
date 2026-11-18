@@ -3,6 +3,7 @@
 // Used by CamSlicer.rc
 //
 #define IDI_ICON                        100
+#define IDI_VOLUME_TOOL                 101
 
 // Next default values for new objects
 //

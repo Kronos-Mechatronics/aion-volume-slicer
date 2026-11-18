@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include <filesystem>
 #include "CamSlicer.h"
+#include "Resource.h"
 #include "InteractiveSelection.h"
 #include "Geometry5X.h"
 #include <format.hpp>
@@ -1246,16 +1247,18 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
     return true;
 }
 
-// TODO: Implement icon for CamSlicer without wxWidgets dependency.
-/* 
-HICON CamVolume::getIcon(int size_x, int size_y) const
+HICON CamSlicer::getIcon(int size_x, int size_y) const
 {
-    if (!m_icon.IsOk() || m_icon.GetSize() != wxSize(size_x, size_y)) {
-        m_icon = Aion::loadPngResourceAsIcon("ICON_VOLUME_TOOL", wxSize(size_x, size_y));
+    // the icon resource is in this DLL
+    AFX_MANAGE_STATE(AfxGetStaticModuleState());
+    // Load the matching size from the resource
+    HICON icon = static_cast<HICON>(LoadImageW(AfxGetInstanceHandle(), MAKEINTRESOURCEW(IDI_VOLUME_TOOL), IMAGE_ICON, size_x, size_y, LR_DEFAULTCOLOR | LR_SHARED));
+    if (icon == nullptr) {
+        // fall back to the default icon of Aion
+        return CamBase::getIcon(size_x, size_y);
     }
-    return m_icon.GetHICON();
+    return icon;
 }
-*/
 
 Aion::OptionsGroups CamSlicer::getOptionsByGroup()
 {
