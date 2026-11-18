@@ -20,7 +20,7 @@ public:
     ~CamSlicer() = default;
     // override class information
     // name of this cam block type
-    virtual std::string getTypeName() const override { return "Slicer"; };
+    virtual std::string getTypeName() const override { return "Volume"; };
     // short description of this cam block type
     virtual std::string getTypeShortDescription() const override { return "Slice a volumetric object"; }
     // Optional url to documentation for this cam block type.

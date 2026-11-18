@@ -269,7 +269,7 @@ static const std::string& getDefaultSlicerOptions()
 }
 
 CamSlicer::CamSlicer(const ON_UUID& plugin_uuid)
-    : CamBase("Unnamed CamSlicer", ON_UuidFromString(L"6DB9405E-BC94-498E-877C-E427D8288C5B"), plugin_uuid)
+    : CamBase("Unnamed CamVolume", ON_UuidFromString(L"6DB9405E-BC94-498E-877C-E427D8288C5B"), plugin_uuid)
 {
     // init options of this cam block
     m_volume_components = new Aion::ConfigOptionComponentVector();
@@ -619,7 +619,7 @@ bool _createSlicerMesh(const ON_Mesh& on_mesh, const ON_Xform& xform, Slic3r::Tr
         ON_3dPoint on_vert = use_double_vertices ? on_mesh.m_dV[i] : ON_3dPoint(on_mesh.m_V[i]);
         on_vert.Transform(xform);
         if (!on_vert.IsValid()) {
-            errors.push_back(Aion::Error(Aion::ErrorClass::Critical, "Slicer object has invalid mesh vertices."));
+            errors.push_back(Aion::Error(Aion::ErrorClass::Critical, "Volume object has invalid mesh vertices."));
             return false;
         }
         s_its.vertices.emplace_back(float(on_vert.x), float(on_vert.y), float(on_vert.z));
@@ -630,7 +630,7 @@ bool _createSlicerMesh(const ON_Mesh& on_mesh, const ON_Xform& xform, Slic3r::Tr
         const ON_MeshFace& on_face = on_mesh.m_F[i];
         // out of range indices would crash in PrusaSlicer without an exception
         if (!on_face.IsValid(vertex_count)) {
-            errors.push_back(Aion::Error(Aion::ErrorClass::Critical, "Slicer object has invalid mesh faces."));
+            errors.push_back(Aion::Error(Aion::ErrorClass::Critical, "Volume object has invalid mesh faces."));
             return false;
         }
         s_its.indices.emplace_back(on_face.vi[0], on_face.vi[1], on_face.vi[2]);
@@ -641,7 +641,7 @@ bool _createSlicerMesh(const ON_Mesh& on_mesh, const ON_Xform& xform, Slic3r::Tr
 
     s_mesh = Slic3r::TriangleMesh(std::move(s_its));
     if (s_mesh.empty()) {
-        errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Slicer object could not be meshed, the mesh is empty."));
+        errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Volume object could not be meshed, the mesh is empty."));
         return false;
     }
     // PrusaSlicer expects outward facing normals, inside out meshes have a negative volume
@@ -650,7 +650,7 @@ bool _createSlicerMesh(const ON_Mesh& on_mesh, const ON_Xform& xform, Slic3r::Tr
     }
     // open meshes are already reported by createNurbsMesh, only report the non-manifold edges of closed meshes
     if (!s_mesh.stats().manifold() && on_mesh.IsClosed()) {
-        errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Slicer object has " + std::to_string(s_mesh.stats().open_edges) + " non-manifold edges. Slicing results may be incomplete."));
+        errors.push_back(Aion::Error(Aion::ErrorClass::Warning, "Volume object has " + std::to_string(s_mesh.stats().open_edges) + " non-manifold edges. Slicing results may be incomplete."));
     }
     return true;
 }
@@ -1074,7 +1074,7 @@ bool CamSlicer::generateToolpath(Aion::Errorlist& errors)
     Slic3r::Print s_print;
     Slic3r::ModelObject* s_mo_ptr = s_model.add_object();
     // generic name for PrusaSlicer messages
-    s_mo_ptr->name = "\"Slicer volume\"";
+    s_mo_ptr->name = "\"Volume\"";
     s_mo_ptr->add_instance();
     // Get create the slicer config from the initial config and the options of this cam block
     Slic3r::DynamicPrintConfig s_config;

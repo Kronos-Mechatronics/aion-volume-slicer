@@ -35,7 +35,7 @@ RHINO_PLUG_IN_VERSION(VER_FILEVERSION_STR);
 
 // Rhino plug-in description
 // Provide a description of this plug-in.
-RHINO_PLUG_IN_DESCRIPTION(L"CamSlicer plug-in for Aion-5X.");
+RHINO_PLUG_IN_DESCRIPTION(L"Volume CAM block plug-in for Aion-5X.");
 
 // Rhino plug-in icon resource id
 // Provide an icon resource this plug-in.
