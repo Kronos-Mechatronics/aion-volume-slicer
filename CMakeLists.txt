@@ -1,6 +1,6 @@
 # We work on version 4.2.0 as Aion is also build on this version
 cmake_minimum_required(VERSION 4.2.0)
-project("Aion-Slicer" LANGUAGES CXX VERSION 0.1.0)
+project("Aion-Volume-Slicer" LANGUAGES CXX VERSION 0.1.0)
 
 set(VENDOR "Kronos Mechatronics GmbH")
 set(VENDOR_URL "kronos-mct.com")

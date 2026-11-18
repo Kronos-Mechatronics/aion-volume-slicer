@@ -64,7 +64,7 @@ To build from terminal (e.g. git-bash / PowerShell) do something like this:
     cmake .. -G "Visual Studio 17 2022" -A x64 -T v142 -DCMAKE_PREFIX_PATH="c:/software/Aion-slicer-libs/"
     cmake --build .
 
-this will produce the binary `Aion-Slicer.rhp` in `<path/to/repository>/build/Debug/`  
+this will produce the binary `Aion-Volume-Slicer.rhp` in `<path/to/repository>/build/Debug/`  
 To build a release version of the binary, just change `cmake --build .` to `cmake --build . --config Release` in the last command. 
 
 The generated .sln file can be opened in Visual Studio from the build directory to build the plugin from there.
