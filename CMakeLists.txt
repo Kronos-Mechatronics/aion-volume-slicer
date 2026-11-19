@@ -214,3 +214,6 @@ add_custom_command(
     $<TARGET_FILE_DIR:${PROJECT_NAME}>
   COMMAND_EXPAND_LISTS
 )
+
+# add the cpack cmake file to create the installer
+include("${CMAKE_CURRENT_SOURCE_DIR}/cpack/cpack.cmake")

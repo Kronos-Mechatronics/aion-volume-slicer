@@ -414,3 +414,5 @@ doc/*
 *.3dm.rhl
 *.3dmbak
 *.prg
+# Innosetup files
+*.iss
