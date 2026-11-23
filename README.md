@@ -16,6 +16,7 @@ Make sure to install ATL, MFC and SDK for VS 2019 compiler as described in the l
     Aion-5X SDK
     CMake
     Git
+    Python3 (for building the Prusaslicer dependencies)
 
 For downloading the code, clone it with git to the disk (<path/to/repository> need to be replaced with a propper path on the local disk):
 
