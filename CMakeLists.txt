@@ -216,4 +216,6 @@ add_custom_command(
 )
 
 # add the cpack cmake file to create the installer
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cpack/cpack.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cpack/cpack.cmake")
+endif()
