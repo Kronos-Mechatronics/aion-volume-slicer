@@ -1,6 +1,6 @@
 # We work on version 4.2.0 as Aion is also build on this version
 cmake_minimum_required(VERSION 4.2.0)
-project("Aion-Volume-Slicer" LANGUAGES CXX VERSION 0.1.0)
+project("Aion-Volume-Slicer" LANGUAGES CXX VERSION 1.0.0)
 
 set(VENDOR "Kronos Mechatronics GmbH")
 set(VENDOR_URL "kronos-mct.com")
@@ -215,7 +215,7 @@ add_custom_command(
   COMMAND_EXPAND_LISTS
 )
 
-# add the cpack cmake file to create the installer
+# add the cpack cmake file to create the installer 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cpack/cpack.cmake")
-include("${CMAKE_CURRENT_SOURCE_DIR}/cpack/cpack.cmake")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cpack/cpack.cmake")
 endif()
